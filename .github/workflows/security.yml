@@ -1,0 +1,88 @@
+name: published-image-security
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '43 5 * * 1'
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: published-image-security
+  cancel-in-progress: false
+jobs:
+  scan:
+    if: github.repository == 'Paul1404/vertex-images' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        workload: [hofstetten, untereuerheim]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Resolve published immutable image
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKLOAD: ${{ matrix.workload }}
+        run: python3 scripts/scan_target.py "$WORKLOAD"
+      - name: Verify trusted digest provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.target.outputs.image }}
+          RECIPE_SHA: ${{ steps.target.outputs.recipe_sha }}
+        run: gh attestation verify "oci://$IMAGE" --repo Paul1404/vertex-images --signer-workflow Paul1404/vertex-images/.github/workflows/image.yml --signer-digest "$RECIPE_SHA" --source-digest "$RECIPE_SHA" --source-ref refs/heads/main --deny-self-hosted-runners --format json > provenance-verification.json
+      - name: Pull and verify source labels without running image
+        env:
+          IMAGE: ${{ steps.target.outputs.image }}
+          SOURCE_REPO: ${{ steps.target.outputs.repository }}
+          SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
+          RECIPE_SHA: ${{ steps.target.outputs.recipe_sha }}
+        run: |
+          docker pull "$IMAGE"
+          test "$(docker inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/$SOURCE_REPO"
+          test "$(docker inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$SOURCE_SHA"
+          test "$(docker inspect "$IMAGE" --format '{{index .Config.Labels "net.pdcd.vertex.recipe"}}')" = "$RECIPE_SHA"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ steps.target.outputs.repository }}
+          ref: ${{ steps.target.outputs.source_sha }}
+          path: source
+          persist-credentials: false
+      - name: Scan every vulnerability severity on the published digest
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
+          image-ref: ${{ steps.target.outputs.image }}
+          scanners: vuln
+          format: json
+          output: image-vulnerabilities.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '0'
+          timeout: 10m
+      - name: Refresh SBOM from immutable published image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
+          image-ref: ${{ steps.target.outputs.image }}
+          format: cyclonedx
+          output: sbom.cdx.json
+          scanners: vuln
+          exit-code: '0'
+      - name: Apply the exact published source vulnerability policy
+        run: python3 source/scripts/check-image-vulnerabilities.py image-vulnerabilities.json
+      - name: Retain complete report and exact scan target
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: security-${{ matrix.workload }}
+          path: |
+            scan-target.json
+            provenance-verification.json
+            image-vulnerabilities.json
+            sbom.cdx.json
+          retention-days: 14
+          if-no-files-found: warn
