@@ -48,6 +48,29 @@ class PlanTests(unittest.TestCase):
             self.assertEqual(plan.plan(RECIPE, fetch=self.fetch, exists=lambda *_: False), [])
             self.runs[0][key] = old
 
+    def test_two_workloads_resolve_independently(self):
+        def fetch(path):
+            result = self.fetch(path)
+            if "/runs?" in path:
+                repo = "Paul1404/untereuerheim.com" if "untereuerheim.com" in path else "Paul1404/hof-stetten.de"
+                return {"workflow_runs": [{**self.runs[0], "head_repository": {"full_name": repo}}]}
+            return result
+        result = plan.plan(RECIPE, fetch=fetch, exists=lambda *_: False)
+        self.assertEqual({r["name"] for r in result}, {"hofstetten", "untereuerheim"})
+        self.assertEqual(len({r["image"] for r in result}), 2)
+        self.assertEqual(plan.plan(RECIPE, selected="untereuerheim", fetch=fetch, exists=lambda *_: False)[0]["repository"], "Paul1404/untereuerheim.com")
+
+    def test_one_pending_source_does_not_block_other(self):
+        def fetch(path):
+            result = self.fetch(path)
+            if "/runs?" in path and "untereuerheim.com" in path:
+                return {"workflow_runs": [{**self.runs[0], "head_repository": {"full_name": "Paul1404/untereuerheim.com"}}]}
+            if "/runs?" in path:
+                return {"workflow_runs": [{**self.runs[0], "status": "queued", "conclusion": None}]}
+            return result
+        result = plan.plan(RECIPE, fetch=fetch, exists=lambda *_: False)
+        self.assertEqual([r["name"] for r in result], ["untereuerheim"])
+
     def test_skip_published_pair(self):
         self.assertEqual(plan.plan(RECIPE, fetch=self.fetch, exists=lambda *_: True), [])
 

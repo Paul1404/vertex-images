@@ -5,7 +5,10 @@ import re
 import urllib.error
 import urllib.request
 
-ALLOWLIST = {"hofstetten": {"repository": "Paul1404/hof-stetten.de", "image": "ghcr.io/paul1404/vertex-hofstetten", "workflow": "ci.yml"}}
+ALLOWLIST = {
+    "hofstetten": {"repository": "Paul1404/hof-stetten.de", "image": "ghcr.io/paul1404/vertex-hofstetten", "workflow": "ci.yml"},
+    "untereuerheim": {"repository": "Paul1404/untereuerheim.com", "image": "ghcr.io/paul1404/vertex-untereuerheim", "workflow": "ci.yml"},
+}
 
 
 def api(path):
