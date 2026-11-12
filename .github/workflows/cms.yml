@@ -1,0 +1,160 @@
+name: cms
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - recipes/web-services/**
+      - scripts/**
+      - tests/**
+      - .gitleaks.toml
+      - .github/workflows/cms.yml
+      - .github/workflows/cms-image.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cms-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+  source-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+      - run: bash recipes/web-services/source-checks.sh
+      - run: python3 -m unittest discover -s tests -v
+      - run: git diff --check
+  images:
+    name: images (${{ matrix.directory }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - directory: railway-sm-redaxo
+            workload: cms-sm
+            publish: true
+          - directory: railway-sm-redaxo-origin
+            workload: origin-sm
+            publish: false
+          - directory: railway-svu-wordpress
+            workload: cms-svu
+            publish: true
+          - directory: railway-svu-origin
+            workload: origin-svu
+            publish: false
+          - directory: railway-wengertsberg-wordpress
+            workload: cms-wengertsberg
+            publish: true
+          - directory: railway-wengertsberg-origin
+            workload: origin-wengertsberg
+            publish: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build one exact recipe image
+        env:
+          CONTEXT: recipes/web-services/${{ matrix.directory }}
+        run: |
+          docker build --pull --platform linux/amd64 --provenance=false \
+            --build-arg "SECURITY_REBUILD=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "net.pdcd.vertex.recipe=$GITHUB_SHA" \
+            --label "net.pdcd.vertex.context=$CONTEXT" \
+            --tag vertex-tested "$CONTEXT"
+      - name: Exercise original isolated production fixtures
+        working-directory: recipes/web-services
+        env:
+          DIRECTORY: ${{ matrix.directory }}
+        run: python3 tests/release-smoke.py "$DIRECTORY" vertex-tested
+      - name: Scan all image vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
+          image-ref: vertex-tested
+          scanners: vuln
+          format: json
+          output: image-vulnerabilities.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '0'
+          timeout: 10m
+      - name: Enforce reviewed fixable high and critical vulnerability policy
+        run: python3 scripts/check-image-vulnerabilities.py image-vulnerabilities.json
+      - name: SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
+          image-ref: vertex-tested
+          format: cyclonedx
+          output: sbom.cdx.json
+          scanners: vuln
+          exit-code: '0'
+      - name: Retain complete scan evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: cms-scan-${{ matrix.workload }}
+          path: |
+            image-vulnerabilities.json
+            sbom.cdx.json
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Save exact tested application image
+        if: matrix.publish && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: |
+          mkdir -p /tmp/vertex-result
+          docker save vertex-tested | gzip -1 > /tmp/vertex-result/image.tar.gz
+          cp image-vulnerabilities.json sbom.cdx.json /tmp/vertex-result/
+      - name: Share tested application image with fresh publisher
+        if: matrix.publish && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: tested-${{ matrix.workload }}
+          path: /tmp/vertex-result
+          retention-days: 1
+          if-no-files-found: error
+  publish:
+    name: publish-${{ matrix.workload }}
+    needs: [secrets, source-checks, images]
+    if: github.repository == 'Paul1404/vertex-images' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - workload: cms-sm
+            directory: railway-sm-redaxo
+          - workload: cms-svu
+            directory: railway-svu-wordpress
+          - workload: cms-wengertsberg
+            directory: railway-wengertsberg-wordpress
+    uses: ./.github/workflows/cms-image.yml
+    with:
+      workload: ${{ matrix.workload }}
+      directory: ${{ matrix.directory }}

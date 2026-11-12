@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        workload: [hofstetten, untereuerheim]
+        workload: [hofstetten, untereuerheim, cms-sm, cms-svu, cms-wengertsberg]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -33,11 +33,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ${{ steps.target.outputs.image }}
           RECIPE_SHA: ${{ steps.target.outputs.recipe_sha }}
-        run: gh attestation verify "oci://$IMAGE" --repo Paul1404/vertex-images --signer-workflow Paul1404/vertex-images/.github/workflows/image.yml --signer-digest "$RECIPE_SHA" --source-digest "$RECIPE_SHA" --source-ref refs/heads/main --deny-self-hosted-runners --format json > provenance-verification.json
+          SIGNER_WORKFLOW: ${{ steps.target.outputs.signer_workflow }}
+        run: gh attestation verify "oci://$IMAGE" --repo Paul1404/vertex-images --signer-workflow "Paul1404/vertex-images/.github/workflows/$SIGNER_WORKFLOW" --signer-digest "$RECIPE_SHA" --source-digest "$RECIPE_SHA" --source-ref refs/heads/main --deny-self-hosted-runners --format json > provenance-verification.json
       - name: Pull and verify source labels without running image
         env:
           IMAGE: ${{ steps.target.outputs.image }}
           SOURCE_REPO: ${{ steps.target.outputs.repository }}
+          EXPECTED_CONTEXT: ${{ steps.target.outputs.context }}
           SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
           RECIPE_SHA: ${{ steps.target.outputs.recipe_sha }}
         run: |
@@ -45,6 +47,9 @@ jobs:
           test "$(docker inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/$SOURCE_REPO"
           test "$(docker inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$SOURCE_SHA"
           test "$(docker inspect "$IMAGE" --format '{{index .Config.Labels "net.pdcd.vertex.recipe"}}')" = "$RECIPE_SHA"
+          if [ -n "$EXPECTED_CONTEXT" ]; then
+            test "$(docker inspect "$IMAGE" --format '{{index .Config.Labels "net.pdcd.vertex.context"}}')" = "$EXPECTED_CONTEXT"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: ${{ steps.target.outputs.repository }}
@@ -73,7 +78,9 @@ jobs:
           scanners: vuln
           exit-code: '0'
       - name: Apply the exact published source vulnerability policy
-        run: python3 source/scripts/check-image-vulnerabilities.py image-vulnerabilities.json
+        env:
+          POLICY_PATH: ${{ steps.target.outputs.policy_path }}
+        run: python3 "source/$POLICY_PATH" image-vulnerabilities.json
       - name: Retain complete report and exact scan target
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

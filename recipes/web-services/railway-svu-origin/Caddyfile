@@ -1,0 +1,22 @@
+:8080 {
+	@health path /healthz
+	handle @health {
+		reverse_proxy {$WORDPRESS_UPSTREAM} {
+			rewrite /railway-health.php
+			header_up Host sv-untereuerheim.de
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	@cloudfront header X-SVU-Origin-Key {$ORIGIN_VERIFY}
+	handle @cloudfront {
+		reverse_proxy {$WORDPRESS_UPSTREAM} {
+			header_up Host sv-untereuerheim.de
+			header_up X-Forwarded-Proto https
+		}
+	}
+
+	handle {
+		respond "Forbidden" 403
+	}
+}
