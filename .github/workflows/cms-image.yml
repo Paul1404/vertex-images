@@ -46,27 +46,38 @@ jobs:
           current=$(gh api "repos/$SOURCE_REPO/commits/main" --jq .sha)
           test "$current" = "$SOURCE_SHA" || { echo 'Source superseded; wait for next poll'; exit 1; }
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          expected_config=$(python3 - <<'PY'
+          import hashlib, json, tarfile
+          with tarfile.open('/tmp/vertex-result/image.tar.gz', 'r:gz') as saved:
+              manifest = json.load(saved.extractfile('manifest.json'))
+              if len(manifest) != 1:
+                  raise ValueError('Expected one tested image')
+              config = saved.extractfile(manifest[0]['Config']).read()
+              print('sha256:' + hashlib.sha256(config).hexdigest())
+          PY
+          )
           gunzip -c /tmp/vertex-result/image.tar.gz | docker load
           test "$(docker inspect vertex-tested --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$SOURCE_SHA"
           test "$(docker inspect vertex-tested --format '{{index .Config.Labels "net.pdcd.vertex.recipe"}}')" = "$RECIPE_SHA"
           test "$(docker inspect vertex-tested --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/$SOURCE_REPO"
           test "$(docker inspect vertex-tested --format '{{index .Config.Labels "net.pdcd.vertex.context"}}')" = "$CONTEXT"
           if docker manifest inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
-            docker pull "$IMAGE:$TAG"
-            test "$(docker inspect vertex-tested --format '{{.Id}}')" = "$(docker inspect "$IMAGE:$TAG" --format '{{.Id}}')" || { echo 'Existing immutable tag differs from tested image; refusing overwrite'; exit 1; }
+            remote_config=$(docker buildx imagetools inspect "$IMAGE:$TAG" --raw | jq -er '.config.digest')
+            test "$expected_config" = "$remote_config" || { echo 'Existing immutable tag differs from tested image; refusing overwrite'; exit 1; }
             echo 'Existing tested image matches; repairing evidence without overwriting tag'
           else
             docker tag vertex-tested "$IMAGE:$TAG"
             docker push "$IMAGE:$TAG"
           fi
           digest=$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')
+          config_id=$(docker buildx imagetools inspect "$IMAGE@$digest" --raw | jq -er '.config.digest')
+          test "$config_id" = "$expected_config"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           jq -n --arg repository "$SOURCE_REPO" --arg source_sha "$SOURCE_SHA" --arg recipe_sha "$RECIPE_SHA" --arg image "$IMAGE@$digest" --arg tag "$TAG" --argjson source_ci_run "$GITHUB_RUN_ID" --argjson build_run "$GITHUB_RUN_ID" '{repository:$repository,source_sha:$source_sha,recipe_sha:$recipe_sha,image:$image,tag:$tag,source_ci_run:$source_ci_run,build_run:$build_run}' > /tmp/vertex-result/delivery.json
           archive="$WORKLOAD-$SOURCE_SHA.tar.gz"
           release="$WORKLOAD-$SOURCE_SHA"
           cp /tmp/vertex-result/image.tar.gz "/tmp/vertex-result/$archive"
           archive_sha=$(sha256sum "/tmp/vertex-result/$archive" | cut -d ' ' -f1)
-          config_id=$(docker inspect vertex-tested --format '{{.Id}}')
           archive_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$release/$archive"
           jq --arg archive_url "$archive_url" --arg archive_sha256 "$archive_sha" --arg config_id "$config_id" --arg context "$CONTEXT" '. + {archive_url:$archive_url,archive_sha256:$archive_sha256,config_id:$config_id,context:$context}' /tmp/vertex-result/delivery.json > /tmp/vertex-result/release.json
           printf '%s  %s\n' "$archive_sha" "$archive" > "/tmp/vertex-result/$archive.sha256"

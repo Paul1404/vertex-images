@@ -51,3 +51,11 @@ modified files still match their original source blobs. The REDAXO base is
 pinned by digest. WordPress currently retains its reviewed version tag, so a
 rebuild is not a claim of byte-for-byte reproducibility. Record resolved base
 materials and scan each candidate before production promotion.
+
+## Reviewed image security changes
+
+`import.json` records the original imported files and their hashes. It remains the
+unchanged audit baseline, not a claim that every current recipe is byte-identical
+to upstream. [SECURITY-DELTA.md](SECURITY-DELTA.md) records intentional security
+changes made after the initial hosted vulnerability scan. Source and runtime
+behavior remain subject to the same isolated fixtures and publication gates.

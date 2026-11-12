@@ -1,4 +1,13 @@
-FROM friendsofredaxo/redaxo@sha256:212699c8ec07f5e7bd9d8f52458a919671450627f77e2165e805f057b67f767c
+FROM friendsofredaxo/redaxo@sha256:34144244f37dcd410e59437219a4425fab8a506bb4e12cf3892985c127e1cbd3
+
+# Refresh Debian security fixes for each reviewed source commit. Preserve the
+# upstream PHP/Apache configuration while updating its distribution packages.
+ARG SECURITY_REBUILD=local
+RUN test -n "$SECURITY_REBUILD" \
+    && apt-get update -o APT::Update::Error-Mode=any \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::=--force-confold \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # PHP uses prefork; loading the event MPM as well prevents Apache starting.
 RUN a2dismod mpm_event \

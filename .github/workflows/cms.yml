@@ -5,7 +5,9 @@ on:
     branches: [main]
     paths:
       - recipes/web-services/**
-      - scripts/check-image-vulnerabilities.py
+      - scripts/**
+      - tests/**
+      - .gitleaks.toml
       - .github/workflows/cms.yml
       - .github/workflows/cms-image.yml
   workflow_dispatch:
@@ -74,7 +76,8 @@ jobs:
         env:
           CONTEXT: recipes/web-services/${{ matrix.directory }}
         run: |
-          docker build --pull --platform linux/amd64 \
+          docker build --pull --platform linux/amd64 --provenance=false \
+            --build-arg "SECURITY_REBUILD=$GITHUB_SHA" \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --label "net.pdcd.vertex.recipe=$GITHUB_SHA" \

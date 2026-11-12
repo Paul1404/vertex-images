@@ -1,5 +1,14 @@
 FROM wordpress:7.1.3
 
+# Refresh Debian security fixes for each reviewed source commit. Preserve the
+# upstream PHP/Apache configuration while updating its distribution packages.
+ARG SECURITY_REBUILD=local
+RUN test -n "$SECURITY_REBUILD" \
+    && apt-get update -o APT::Update::Error-Mode=any \
+    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::=--force-confold \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 # Keep a smaller idle Apache pool while preserving the existing request ceiling.
 COPY mpm_prefork.conf /etc/apache2/mods-available/mpm_prefork.conf
 
