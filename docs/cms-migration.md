@@ -11,12 +11,27 @@ historical Caddy origins. Only the active CMS images are publication candidates.
 Source checks, secret scanning, functional tests, vulnerability policy and
 isolated publication must pass before promotion. No origin deployment is revived.
 
-The source repository's existing publishers and branch gates remain active
-during validation. The private Fleet consumer owns eventual digest promotion.
-It must verify the hub publisher identity, exact source/recipe commit, tested
-image identity and signature, then update only the intended site's image,
-release header and source metadata. Prior image archive URLs and hashes remain
-valid recovery provenance.
+The three sites adopted the hub release at
+`ff9dfd1cdd29c53c0a17c0a4dad6f852d735faa8` on 2026-11-12 after
+[the main CMS pipeline](https://github.com/Paul1404/vertex-images/actions/runs/43295202395)
+passed all source, fixture, scan and publication gates. The private Fleet
+consumer independently verified the signed image configuration, every recovery
+layer and all three release records before updating the intended image pins,
+release headers and application recovery metadata. Database and historical
+origin recovery entries and all persistent volume identities were preserved.
+
+Live pod image IDs matched the published digests. All three public homepages
+and database-backed health checks returned 200 with the new release header;
+all three protected origins returned 403 without credentials. The independent
+[published-digest scan](https://github.com/Paul1404/vertex-images/actions/runs/43297718826)
+also passed. Fixable HIGH/CRITICAL findings block delivery; findings with no
+scanner-listed fix remain visible in the full reports. Image scans do not cover
+persisted CMS cores, addons, plugins or customer content.
+
+The old wrapper's two publishers are disabled. Its source history, release
+archives and registry digests remain available for recovery; archival is pending
+the owner's decision. Active recipe and theme changes belong here. Deployment
+credentials and desired-state promotion remain private.
 
 The initial production rollback references are:
 
@@ -33,7 +48,8 @@ all existing persistent data and old registry digests. Disable duplicate old
 publishers and retire their scoped deploy key after replacement promotion works.
 Keep historical releases and tags because recovery metadata still references them.
 
-Migration verification is ongoing. Local source/import checks do not establish
-GitHub build success, production adoption, authenticated CMS operation, contact
-email receipt or restoration. Record measured Actions and live-readback evidence
-when each stage completes.
+Authenticated production CMS administration, contact email receipt and a fresh
+restoration were not exercised during this image-only migration. The existing
+isolated fixtures exercise synthetic CMS login and restart persistence. Detailed
+timing and live-readback evidence are retained in the private operational record;
+no latency speedup or byte-for-byte build reproducibility is claimed.
