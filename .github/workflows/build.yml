@@ -1,0 +1,191 @@
+name: images
+on:
+  workflow_dispatch:
+    inputs:
+      workload:
+        type: choice
+        options: [all, hofstetten]
+        default: all
+  repository_dispatch:
+    types: [source-ci-passed]
+  schedule:
+    - cron: '7,17,27,37,47,57 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s tests -v
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKLOAD: ${{ inputs.workload || 'all' }}
+        run: python3 scripts/plan.py
+  build:
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.11
+      - name: Source checks
+        run: |
+          bun install --frozen-lockfile
+          bun audit
+          bun run check
+          git diff --check
+      - name: Build exact source
+        env:
+          SOURCE_SHA: ${{ matrix.sha }}
+          SOURCE_REPO: ${{ matrix.repository }}
+          RECIPE_SHA: ${{ matrix.recipe }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          docker build --pull --platform linux/amd64 \
+            --build-arg RAILWAY_GIT_COMMIT_SHA="$SOURCE_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$SOURCE_REPO" \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            --label "net.pdcd.vertex.recipe=$RECIPE_SHA" \
+            --tag vertex-tested .
+      - name: Scan all vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
+          image-ref: vertex-tested
+          scanners: vuln
+          format: json
+          output: image-vulnerabilities.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '0'
+          timeout: 10m
+      - name: Enforce source vulnerability policy
+        run: python3 scripts/check-image-vulnerabilities.py image-vulnerabilities.json
+      - name: SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
+          image-ref: vertex-tested
+          format: cyclonedx
+          output: sbom.cdx.json
+          scanners: vuln
+          exit-code: '0'
+      - name: Exercise built image
+        run: |
+          docker create --name vertex-smoke --publish 127.0.0.1:4321:4321 --env ORIGIN_AUTH_SECRET=isolated-smoke-test-secret vertex-tested
+          docker cp vertex-smoke:/app/dist ./dist
+          bun test tests
+          docker start vertex-smoke
+          curl --fail --retry 20 --retry-delay 1 --retry-all-errors --max-time 2 --retry-max-time 30 http://127.0.0.1:4321/health.json
+          SMOKE_ORIGIN_SECRET=isolated-smoke-test-secret bun run test:smoke -- http://127.0.0.1:4321
+      - name: Save tested image
+        run: |
+          mkdir -p /tmp/vertex-result
+          docker save vertex-tested | gzip -1 > /tmp/vertex-result/image.tar.gz
+          cp image-vulnerabilities.json sbom.cdx.json /tmp/vertex-result/
+      - name: Retain scan evidence on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: failure-${{ matrix.name }}
+          path: image-vulnerabilities.json
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: tested-${{ matrix.name }}
+          path: /tmp/vertex-result
+          retention-days: 1
+          if-no-files-found: error
+      - name: Cleanup
+        if: always()
+        run: docker rm --force vertex-smoke || true
+  publish:
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: tested-${{ matrix.name }}
+          path: /tmp/vertex-result
+      - name: Publish tested image without executing source
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ matrix.image }}
+          TAG: ${{ matrix.tag }}
+          SOURCE_REPO: ${{ matrix.repository }}
+          SOURCE_SHA: ${{ matrix.sha }}
+          RECIPE_SHA: ${{ matrix.recipe }}
+          CI_RUN: ${{ matrix.ci_run }}
+        run: |
+          set -euo pipefail
+          current=$(gh api "repos/$SOURCE_REPO/commits/main" --jq .sha)
+          test "$current" = "$SOURCE_SHA" || { echo 'Source superseded; wait for next poll'; exit 1; }
+          gh api "repos/$SOURCE_REPO/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha=$SOURCE_SHA&per_page=1" --jq ".workflow_runs[0]" | jq -e --arg sha "$SOURCE_SHA" --arg repo "$SOURCE_REPO" '.path == ".github/workflows/ci.yml" and .head_repository.full_name == $repo and .head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success"' >/dev/null
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          gunzip -c /tmp/vertex-result/image.tar.gz | docker load
+          test "$(docker inspect vertex-tested --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$SOURCE_SHA"
+          test "$(docker inspect vertex-tested --format '{{index .Config.Labels "net.pdcd.vertex.recipe"}}')" = "$RECIPE_SHA"
+          if docker manifest inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+            docker pull "$IMAGE:$TAG"
+            test "$(docker inspect vertex-tested --format '{{.Id}}')" = "$(docker inspect "$IMAGE:$TAG" --format '{{.Id}}')" || { echo 'Existing immutable tag differs from tested image; refusing overwrite'; exit 1; }
+            echo 'Existing tested image matches; repairing evidence without overwriting tag'
+          else
+            docker tag vertex-tested "$IMAGE:$TAG"
+            docker push "$IMAGE:$TAG"
+          fi
+          digest=$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          jq -n --arg repository "$SOURCE_REPO" --arg source_sha "$SOURCE_SHA" --arg recipe_sha "$RECIPE_SHA" --arg image "$IMAGE@$digest" --arg tag "$TAG" --argjson source_ci_run "$CI_RUN" --argjson build_run "$GITHUB_RUN_ID" '{repository:$repository,source_sha:$source_sha,recipe_sha:$recipe_sha,image:$image,tag:$tag,source_ci_run:$source_ci_run,build_run:$build_run}' > /tmp/vertex-result/delivery.json
+          printf 'Source: https://github.com/%s/commit/%s\nRecipe: %s\nImage: %s@%s\n' "$SOURCE_REPO" "$SOURCE_SHA" "$RECIPE_SHA" "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
+      - name: Attest published digest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-name: ${{ matrix.image }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+      - name: Retain delivery evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: evidence-${{ matrix.name }}
+          path: |
+            /tmp/vertex-result/image-vulnerabilities.json
+            /tmp/vertex-result/sbom.cdx.json
+            /tmp/vertex-result/delivery.json
+          retention-days: 14
