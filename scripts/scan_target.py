@@ -11,6 +11,10 @@ from plan import ALLOWLIST, api
 
 TAG = re.compile(r"sha-([a-f0-9]{40})-recipe-([a-f0-9]{40})")
 HUB = "Paul1404/vertex-images"
+SCAN_CATALOG = {
+    **{name: {**entry, "build_workflow": "build.yml", "publisher_job": f"image-{name} / publish", "signer_workflow": "image.yml", "policy_path": "scripts/check-image-vulnerabilities.py", "events": ("schedule", "workflow_dispatch", "repository_dispatch")} for name, entry in ALLOWLIST.items()},
+    **{f"cms-{site}": {"repository": HUB, "image": f"ghcr.io/paul1404/vertex-cms-{site}", "build_workflow": "cms.yml", "publisher_job": f"publish-cms-{site} / publish", "signer_workflow": "cms-image.yml", "policy_path": "scripts/check-image-vulnerabilities.py", "events": ("push", "workflow_dispatch"), "context": "recipes/web-services/" + {"sm": "railway-sm-redaxo", "svu": "railway-svu-wordpress", "wengertsberg": "railway-wengertsberg-wordpress"}[site]} for site in ("sm", "svu", "wengertsberg")},
+}
 
 
 class PublicRegistry:
@@ -52,9 +56,9 @@ class PublicRegistry:
 
 
 def resolve(name, fetch=api, registry_factory=PublicRegistry):
-    if name not in ALLOWLIST:
+    if name not in SCAN_CATALOG:
         raise ValueError("Unknown workload")
-    entry = ALLOWLIST[name]
+    entry = SCAN_CATALOG[name]
     repo = entry["repository"]
     for repository in (repo, HUB):
         meta = fetch(f"repos/{repository}")
@@ -67,6 +71,8 @@ def resolve(name, fetch=api, registry_factory=PublicRegistry):
         if not match:
             continue
         source, recipe = match.groups()
+        if repo == HUB and source != recipe:
+            continue
         source_date = fetch(f"repos/{repo}/commits/{source}")["commit"]["committer"]["date"]
         recipe_date = fetch(f"repos/{HUB}/commits/{recipe}")["commit"]["committer"]["date"]
         candidates.append((source_date, recipe_date, tag, source, recipe))
@@ -74,12 +80,12 @@ def resolve(name, fetch=api, registry_factory=PublicRegistry):
         # A scan accepts historical published commits, never arbitrary PR branches.
         if any(fetch(f"repos/{repository}/compare/{sha}...main")["status"] not in ("ahead", "identical") for repository, sha in ((repo, source), (HUB, recipe))):
             continue
-        runs = fetch(f"repos/{HUB}/actions/workflows/build.yml/runs?branch=main&head_sha={recipe}&per_page=100")["workflow_runs"]
-        trusted_runs = [r for r in runs if r.get("path") == ".github/workflows/build.yml" and r.get("head_sha") == recipe and r.get("head_branch") == "main" and r.get("event") in ("schedule", "workflow_dispatch", "repository_dispatch") and r.get("head_repository", {}).get("full_name") == HUB]
+        runs = fetch(f"repos/{HUB}/actions/workflows/{entry['build_workflow']}/runs?branch=main&head_sha={recipe}&per_page=100")["workflow_runs"]
+        trusted_runs = [r for r in runs if r.get("path") == f".github/workflows/{entry['build_workflow']}" and r.get("head_sha") == recipe and r.get("head_branch") == "main" and r.get("event") in entry["events"] and r.get("head_repository", {}).get("full_name") == HUB]
         published = False
         for run in trusted_runs:
             jobs = fetch(f"repos/{HUB}/actions/runs/{run['id']}/jobs?per_page=100")["jobs"]
-            if any(j.get("name") == f"image-{name} / publish" and j.get("status") == "completed" and j.get("conclusion") == "success" for j in jobs):
+            if any(j.get("name") == entry["publisher_job"] and j.get("status") == "completed" and j.get("conclusion") == "success" for j in jobs):
                 published = True
                 break
         if not published:
@@ -87,7 +93,7 @@ def resolve(name, fetch=api, registry_factory=PublicRegistry):
         digest = registry.digest(tag)
         if not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
             raise ValueError("Invalid manifest digest")
-        return {"name": name, "repository": repo, "source_sha": source, "recipe_sha": recipe, "tag": tag, "image": entry["image"] + "@" + digest}
+        return {"name": name, "repository": repo, "source_sha": source, "recipe_sha": recipe, "tag": tag, "image": entry["image"] + "@" + digest, "signer_workflow": entry["signer_workflow"], "policy_path": entry["policy_path"], "context": entry.get("context", "")}
     raise ValueError("No trusted published source/recipe pair; publish and verify this public package first")
 
 

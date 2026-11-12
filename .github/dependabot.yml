@@ -7,3 +7,22 @@ updates:
     groups:
       github-actions:
         patterns: ['*']
+  - package-ecosystem: docker
+    directories:
+      - /recipes/web-services/railway-sm-redaxo
+      - /recipes/web-services/railway-sm-redaxo-origin
+      - /recipes/web-services/railway-svu-wordpress
+      - /recipes/web-services/railway-svu-origin
+      - /recipes/web-services/railway-wengertsberg-wordpress
+      - /recipes/web-services/railway-wengertsberg-origin
+    schedule:
+      interval: weekly
+      day: sunday
+      time: '08:00'
+      timezone: Europe/Berlin
+    groups:
+      caddy:
+        patterns: ['caddy']
+      wordpress:
+        patterns: ['wordpress']
+    open-pull-requests-limit: 5

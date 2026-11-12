@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schemas.wp.org/trunk/theme.json",
+  "version": 3,
+  "styles": { "spacing": { "blockGap": "0px" } },
+  "settings": {
+    "layout": { "contentSize": "1240px", "wideSize": "1240px" },
+    "spacing": { "blockGap": false },
+    "color": {
+      "palette": [
+        { "slug": "forest", "name": "Waldgrün", "color": "#2d4a3e" },
+        { "slug": "deep", "name": "Dunkelgrün", "color": "#1e2e28" },
+        { "slug": "green", "name": "Mittelgrün", "color": "#4a7c65" },
+        { "slug": "gold", "name": "Gold", "color": "#c8a96e" },
+        { "slug": "cream", "name": "Creme", "color": "#f7f4ef" }
+      ]
+    }
+  }
+}

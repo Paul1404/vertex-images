@@ -40,6 +40,30 @@ class ScanTests(unittest.TestCase):
             self.assertEqual(result['source_sha'], SOURCE)
             self.assertEqual(result['recipe_sha'], RECIPE)
 
+    def test_cms_uses_own_trusted_workflow_and_policy(self):
+        cms_tag = f'sha-{RECIPE}-recipe-{RECIPE}'
+        class CmsRegistry:
+            def tags(self):
+                return [cms_tag]
+            def digest(self, tag):
+                return DIGEST
+        def fetch(path):
+            if '/runs?' in path:
+                self.assertIn('/cms.yml/', path)
+                return {'workflow_runs': [{'path': '.github/workflows/cms.yml', 'head_sha': RECIPE, 'head_branch': 'main', 'event': 'push', 'id': 234, 'head_repository': {'full_name': scan_target.HUB}}]}
+            if '/jobs?' in path:
+                return {'jobs': [{'name': 'publish-cms-svu / publish', 'status': 'completed', 'conclusion': 'success'}]}
+            return self.fetch(path)
+        result = scan_target.resolve('cms-svu', fetch=fetch, registry_factory=lambda _: CmsRegistry())
+        self.assertEqual(result['signer_workflow'], 'cms-image.yml')
+        self.assertEqual(result['policy_path'], 'scripts/check-image-vulnerabilities.py')
+        self.assertEqual(result['source_sha'], result['recipe_sha'])
+        self.assertEqual(result['context'], 'recipes/web-services/railway-svu-wordpress')
+
+    def test_cms_rejects_mixed_source_recipe(self):
+        with self.assertRaisesRegex(ValueError, 'No trusted published'):
+            scan_target.resolve('cms-sm', fetch=self.fetch, registry_factory=lambda _: Registry())
+
     def test_missing_published_image_fails(self):
         with patch.object(Registry, 'tags', return_value=['latest', 'sha-not-full']):
             with self.assertRaisesRegex(ValueError, 'No trusted published'):

@@ -1,0 +1,99 @@
+name: cms-image
+on:
+  workflow_call:
+    inputs:
+      workload:
+        required: true
+        type: string
+      directory:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  publish:
+    if: github.repository == 'Paul1404/vertex-images' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: tested-${{ inputs.workload }}
+          path: /tmp/vertex-result
+      - name: Publish tested image without executing source
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          IMAGE: ghcr.io/paul1404/vertex-${{ inputs.workload }}
+          TAG: sha-${{ github.sha }}-recipe-${{ github.sha }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_SHA: ${{ github.sha }}
+          RECIPE_SHA: ${{ github.sha }}
+          WORKLOAD: ${{ inputs.workload }}
+          CONTEXT: recipes/web-services/${{ inputs.directory }}
+        run: |
+          set -euo pipefail
+          case "$WORKLOAD:$CONTEXT" in
+            cms-sm:recipes/web-services/railway-sm-redaxo|cms-svu:recipes/web-services/railway-svu-wordpress|cms-wengertsberg:recipes/web-services/railway-wengertsberg-wordpress) ;;
+            *) echo 'Unknown CMS recipe'; exit 1 ;;
+          esac
+          current=$(gh api "repos/$SOURCE_REPO/commits/main" --jq .sha)
+          test "$current" = "$SOURCE_SHA" || { echo 'Source superseded; wait for next poll'; exit 1; }
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          gunzip -c /tmp/vertex-result/image.tar.gz | docker load
+          test "$(docker inspect vertex-tested --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$SOURCE_SHA"
+          test "$(docker inspect vertex-tested --format '{{index .Config.Labels "net.pdcd.vertex.recipe"}}')" = "$RECIPE_SHA"
+          test "$(docker inspect vertex-tested --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/$SOURCE_REPO"
+          test "$(docker inspect vertex-tested --format '{{index .Config.Labels "net.pdcd.vertex.context"}}')" = "$CONTEXT"
+          if docker manifest inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+            docker pull "$IMAGE:$TAG"
+            test "$(docker inspect vertex-tested --format '{{.Id}}')" = "$(docker inspect "$IMAGE:$TAG" --format '{{.Id}}')" || { echo 'Existing immutable tag differs from tested image; refusing overwrite'; exit 1; }
+            echo 'Existing tested image matches; repairing evidence without overwriting tag'
+          else
+            docker tag vertex-tested "$IMAGE:$TAG"
+            docker push "$IMAGE:$TAG"
+          fi
+          digest=$(docker buildx imagetools inspect "$IMAGE:$TAG" --format '{{.Manifest.Digest}}')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          jq -n --arg repository "$SOURCE_REPO" --arg source_sha "$SOURCE_SHA" --arg recipe_sha "$RECIPE_SHA" --arg image "$IMAGE@$digest" --arg tag "$TAG" --argjson source_ci_run "$GITHUB_RUN_ID" --argjson build_run "$GITHUB_RUN_ID" '{repository:$repository,source_sha:$source_sha,recipe_sha:$recipe_sha,image:$image,tag:$tag,source_ci_run:$source_ci_run,build_run:$build_run}' > /tmp/vertex-result/delivery.json
+          archive="$WORKLOAD-$SOURCE_SHA.tar.gz"
+          release="$WORKLOAD-$SOURCE_SHA"
+          cp /tmp/vertex-result/image.tar.gz "/tmp/vertex-result/$archive"
+          archive_sha=$(sha256sum "/tmp/vertex-result/$archive" | cut -d ' ' -f1)
+          config_id=$(docker inspect vertex-tested --format '{{.Id}}')
+          archive_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$release/$archive"
+          jq --arg archive_url "$archive_url" --arg archive_sha256 "$archive_sha" --arg config_id "$config_id" --arg context "$CONTEXT" '. + {archive_url:$archive_url,archive_sha256:$archive_sha256,config_id:$config_id,context:$context}' /tmp/vertex-result/delivery.json > /tmp/vertex-result/release.json
+          printf '%s  %s\n' "$archive_sha" "$archive" > "/tmp/vertex-result/$archive.sha256"
+          gh release view "$release" >/dev/null 2>&1 || gh release create "$release" --target "$SOURCE_SHA" --title "$WORKLOAD $SOURCE_SHA" --notes 'Tested container recovery archive. Runtime data and credentials are not included.'
+          for asset in "$archive" "$archive.sha256" release.json; do
+            if gh release view "$release" --json assets --jq '.assets[].name' | grep -Fxq "$asset"; then
+              mkdir -p /tmp/vertex-existing
+              gh release download "$release" --pattern "$asset" --dir /tmp/vertex-existing
+              cmp "/tmp/vertex-existing/$asset" "/tmp/vertex-result/$asset"
+            else
+              gh release upload "$release" "/tmp/vertex-result/$asset"
+            fi
+          done
+          printf 'Source: https://github.com/%s/commit/%s\nRecipe: %s\nImage: %s@%s\n' "$SOURCE_REPO" "$SOURCE_SHA" "$RECIPE_SHA" "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
+      - name: Attest published digest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-name: ghcr.io/paul1404/vertex-${{ inputs.workload }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+      - name: Retain delivery evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: evidence-${{ inputs.workload }}
+          path: |
+            /tmp/vertex-result/image-vulnerabilities.json
+            /tmp/vertex-result/sbom.cdx.json
+            /tmp/vertex-result/delivery.json
+            /tmp/vertex-result/release.json
+          retention-days: 14

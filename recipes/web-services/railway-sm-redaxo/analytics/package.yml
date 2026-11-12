@@ -1,0 +1,5 @@
+package: web_analytics
+version: '1.0.0'
+author: Paul Dresch
+requires:
+    redaxo: '>=5.20.0'

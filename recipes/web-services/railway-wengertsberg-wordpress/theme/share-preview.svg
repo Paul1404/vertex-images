@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#f7f4ef"/>
+  <g transform="translate(28 0)">
+    <text x="145" y="415" font-family="Georgia,serif" font-size="260" fill="#2d4a3e">W</text>
+    <path d="M448 215v210" stroke="#c8a96e" stroke-width="2"/>
+    <text x="490" y="290" font-family="Arial,sans-serif" font-size="48" letter-spacing="3" fill="#2d4a3e">WENGERTSBERG</text>
+    <text x="493" y="337" font-family="Arial,sans-serif" font-size="24" letter-spacing="3" fill="#4a7c65">TRAINING &amp; CONSULTING</text>
+    <text x="490" y="404" font-family="Arial,sans-serif" font-size="26" fill="#2d4a3e">Alexander Eckert</text>
+  </g>
+</svg>
