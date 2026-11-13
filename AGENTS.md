@@ -23,3 +23,6 @@ Keep those PR check names. Historical origins are test fixtures, not deployments
 The Paperless AI adapter is in `recipes/paperless-ai`. Run
 `python3 -m unittest discover -s recipes/paperless-ai/adapter -p 'test_*.py'`.
 Its workflow tests and scans the image before publishing it from main.
+
+The Stalwart recipe builds the pinned upstream release with the mx legacy
+password patch and its synthetic tests. Building an image does not deploy it.
