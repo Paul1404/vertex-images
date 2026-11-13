@@ -13,7 +13,7 @@ RUN cargo build --locked -p stalwart --no-default-features --features sqlite,ent
     && STORE=Sqlite STALWART_LEGACY_PASSWORD_IMPORT=1 cargo test --locked -p tests --no-default-features --features sqlite --test legacy_password -- --test-threads=1 \
     && STORE=Sqlite cargo test --locked -p tests --no-default-features --features sqlite --test legacy_password -- --test-threads=1 \
     && python3 -m unittest discover -s tools -p test_legacy_password_import.py -v \
-    && cargo build --locked --release -p stalwart
+    && cargo build --locked --release -p stalwart --features postgres,redis,s3
 
 FROM docker.io/rockylinux/rockylinux@sha256:827d37bc128288ccf160ee318bb3cb92d591164cb217e92f8bc61e3982ae1834
 RUN dnf -y upgrade && dnf -y install libstdc++ libgcc ca-certificates libcap && dnf clean all
