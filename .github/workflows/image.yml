@@ -33,7 +33,7 @@ jobs:
           bun audit
           bun run check
           git diff --check
-      - name: Build exact source
+      - name: Build image
         env:
           SOURCE_SHA: ${{ fromJSON(inputs.workload).sha }}
           SOURCE_REPO: ${{ fromJSON(inputs.workload).repository }}
@@ -46,7 +46,7 @@ jobs:
             --label "org.opencontainers.image.revision=$SOURCE_SHA" \
             --label "net.pdcd.vertex.recipe=$RECIPE_SHA" \
             --tag vertex-tested .
-      - name: Scan all vulnerabilities
+      - name: Scan vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.76.1
@@ -58,7 +58,7 @@ jobs:
           ignore-unfixed: false
           exit-code: '0'
           timeout: 10m
-      - name: Enforce source vulnerability policy
+      - name: Check vulnerability report
         run: python3 scripts/check-image-vulnerabilities.py image-vulnerabilities.json
       - name: SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -69,7 +69,7 @@ jobs:
           output: sbom.cdx.json
           scanners: vuln
           exit-code: '0'
-      - name: Exercise built image
+      - name: Run image tests
         env:
           WORKLOAD_NAME: ${{ fromJSON(inputs.workload).name }}
         run: |
@@ -84,7 +84,7 @@ jobs:
           mkdir -p /tmp/vertex-result
           docker save vertex-tested | gzip -1 > /tmp/vertex-result/image.tar.gz
           cp image-vulnerabilities.json sbom.cdx.json /tmp/vertex-result/
-      - name: Retain scan evidence on failure
+      - name: Upload failed scan report
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -115,7 +115,7 @@ jobs:
         with:
           name: tested-${{ fromJSON(inputs.workload).name }}
           path: /tmp/vertex-result
-      - name: Publish tested image without executing source
+      - name: Publish image
         id: publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -128,7 +128,7 @@ jobs:
         run: |
           set -euo pipefail
           current=$(gh api "repos/$SOURCE_REPO/commits/main" --jq .sha)
-          test "$current" = "$SOURCE_SHA" || { echo 'Source superseded; wait for next poll'; exit 1; }
+          test "$current" = "$SOURCE_SHA" || { echo 'Source changed; skipping this image'; exit 1; }
           gh api "repos/$SOURCE_REPO/actions/workflows/ci.yml/runs?event=push&branch=main&head_sha=$SOURCE_SHA&per_page=1" --jq ".workflow_runs[0]" | jq -e --arg sha "$SOURCE_SHA" --arg repo "$SOURCE_REPO" '.path == ".github/workflows/ci.yml" and .head_repository.full_name == $repo and .head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success"' >/dev/null
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           gunzip -c /tmp/vertex-result/image.tar.gz | docker load
@@ -136,8 +136,8 @@ jobs:
           test "$(docker inspect vertex-tested --format '{{index .Config.Labels "net.pdcd.vertex.recipe"}}')" = "$RECIPE_SHA"
           if docker manifest inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
             docker pull "$IMAGE:$TAG"
-            test "$(docker inspect vertex-tested --format '{{.Id}}')" = "$(docker inspect "$IMAGE:$TAG" --format '{{.Id}}')" || { echo 'Existing immutable tag differs from tested image; refusing overwrite'; exit 1; }
-            echo 'Existing tested image matches; repairing evidence without overwriting tag'
+            test "$(docker inspect vertex-tested --format '{{.Id}}')" = "$(docker inspect "$IMAGE:$TAG" --format '{{.Id}}')" || { echo 'Published tag does not match the tested image'; exit 1; }
+            echo 'Reusing the published image to complete publication'
           else
             docker tag vertex-tested "$IMAGE:$TAG"
             docker push "$IMAGE:$TAG"
@@ -146,13 +146,13 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           jq -n --arg repository "$SOURCE_REPO" --arg source_sha "$SOURCE_SHA" --arg recipe_sha "$RECIPE_SHA" --arg image "$IMAGE@$digest" --arg tag "$TAG" --argjson source_ci_run "$CI_RUN" --argjson build_run "$GITHUB_RUN_ID" '{repository:$repository,source_sha:$source_sha,recipe_sha:$recipe_sha,image:$image,tag:$tag,source_ci_run:$source_ci_run,build_run:$build_run}' > /tmp/vertex-result/delivery.json
           printf 'Source: https://github.com/%s/commit/%s\nRecipe: %s\nImage: %s@%s\n' "$SOURCE_REPO" "$SOURCE_SHA" "$RECIPE_SHA" "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
-      - name: Attest published digest
+      - name: Attest image
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-name: ${{ fromJSON(inputs.workload).image }}
           subject-digest: ${{ steps.publish.outputs.digest }}
           push-to-registry: true
-      - name: Retain delivery evidence
+      - name: Upload release reports
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: evidence-${{ fromJSON(inputs.workload).name }}

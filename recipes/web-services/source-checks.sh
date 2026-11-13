@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate public CMS recipe sources without production access.
+# Check CMS recipe syntax and shared assets.
 set -euo pipefail
 cd "$(dirname "$0")"
 bash -n railway-sm-redaxo/entrypoint.sh
