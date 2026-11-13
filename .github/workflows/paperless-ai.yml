@@ -79,7 +79,7 @@ jobs:
           gunzip -c "$RUNNER_TEMP/paperless-ai.tar.gz" | docker load
           test "$(docker inspect vertex-paperless-ai-tested --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          image="ghcr.io/paul1404/vertex-paperless-ai:hub-$GITHUB_SHA"
+          image="ghcr.io/paul1404/vertex-paperless-ai-hub:hub-$GITHUB_SHA"
           if docker manifest inspect "$image" >/dev/null 2>&1; then
             docker pull "$image"
             test "$(docker inspect vertex-paperless-ai-tested --format '{{.Id}}')" = "$(docker inspect "$image" --format '{{.Id}}')"
@@ -91,7 +91,7 @@ jobs:
       - name: Attest image
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-name: ghcr.io/paul1404/vertex-paperless-ai
+          subject-name: ghcr.io/paul1404/vertex-paperless-ai-hub
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
           create-storage-record: false
