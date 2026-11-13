@@ -1,0 +1,115 @@
+name: stalwart
+on:
+  pull_request:
+    paths:
+      - recipes/stalwart/**
+      - .github/workflows/stalwart.yml
+      - scripts/check-image-vulnerabilities.py
+  push:
+    branches: [main]
+    paths:
+      - recipes/stalwart/**
+      - .github/workflows/stalwart.yml
+      - scripts/check-image-vulnerabilities.py
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: stalwartlabs/stalwart
+          ref: aa47d8ef7bfba7200d3293198ac2592747b20e73
+          path: source
+          persist-credentials: false
+      - name: Apply the legacy-password patch
+        run: |
+          test "$(git -C source rev-parse HEAD)" = aa47d8ef7bfba7200d3293198ac2592747b20e73
+          git -C source apply --check ../recipes/stalwart/legacy-passwords.patch
+          git -C source apply ../recipes/stalwart/legacy-passwords.patch
+          rm -rf source/.git
+      - name: Build and test image
+        run: |
+          docker build --platform linux/amd64 --provenance=false \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "net.pdcd.stalwart.source=aa47d8ef7bfba7200d3293198ac2592747b20e73" \
+            --file recipes/stalwart/Dockerfile --tag vertex-stalwart-tested .
+          docker run --rm vertex-stalwart-tested --version | grep -Fx '0.16.27'
+          docker run --rm --entrypoint /bin/sh vertex-stalwart-tested -c 'getcap /usr/local/bin/stalwart | grep -F cap_net_bind_service'
+      - name: Scan image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
+          image-ref: vertex-stalwart-tested
+          scanners: vuln
+          format: json
+          output: image-vulnerabilities.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '0'
+          timeout: 10m
+      - name: Retain scan report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: stalwart-vulnerability-report
+          path: image-vulnerabilities.json
+          if-no-files-found: warn
+          retention-days: 14
+      - run: python3 scripts/check-image-vulnerabilities.py image-vulnerabilities.json
+      - name: Save tested image
+        run: docker save vertex-stalwart-tested | gzip -1 > "$RUNNER_TEMP/stalwart.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: tested-stalwart
+          path: ${{ runner.temp }}/stalwart.tar.gz
+          retention-days: 1
+  publish:
+    needs: build
+    if: github.repository == 'Paul1404/vertex-images' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: tested-stalwart
+          path: ${{ runner.temp }}
+      - name: Publish tested image
+        id: image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$GITHUB_SHA"
+          gunzip -c "$RUNNER_TEMP/stalwart.tar.gz" | docker load
+          test "$(docker inspect vertex-stalwart-tested --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          test "$(docker inspect vertex-stalwart-tested --format '{{index .Config.Labels "net.pdcd.stalwart.source"}}')" = aa47d8ef7bfba7200d3293198ac2592747b20e73
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/paul1404/vertex-stalwart:hub-$GITHUB_SHA"
+          if docker manifest inspect "$image" >/dev/null 2>&1; then
+            docker pull "$image"
+            test "$(docker inspect vertex-stalwart-tested --format '{{.Id}}')" = "$(docker inspect "$image" --format '{{.Id}}')"
+          else
+            docker tag vertex-stalwart-tested "$image"
+            docker push "$image"
+          fi
+          echo "digest=$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')" >> "$GITHUB_OUTPUT"
+      - name: Attest image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/paul1404/vertex-stalwart
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
