@@ -82,6 +82,10 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: tested-stalwart
@@ -92,7 +96,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$GITHUB_SHA"
+          verify_recipe() {
+            git fetch --no-tags origin main
+            git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD
+            git diff --quiet "$GITHUB_SHA" FETCH_HEAD -- recipes/stalwart .github/workflows/stalwart.yml scripts/check-image-vulnerabilities.py
+          }
+          verify_recipe
           gunzip -c "$RUNNER_TEMP/stalwart.tar.gz" | docker load
           test "$(docker inspect vertex-stalwart-tested --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
           test "$(docker inspect vertex-stalwart-tested --format '{{index .Config.Labels "net.pdcd.stalwart.source"}}')" = aa47d8ef7bfba7200d3293198ac2592747b20e73
@@ -103,8 +112,10 @@ jobs:
             test "$(docker inspect vertex-stalwart-tested --format '{{.Id}}')" = "$(docker inspect "$image" --format '{{.Id}}')"
           else
             docker tag vertex-stalwart-tested "$image"
+            verify_recipe
             docker push "$image"
           fi
+          verify_recipe
           echo "digest=$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')" >> "$GITHUB_OUTPUT"
       - name: Attest image
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

@@ -10,4 +10,6 @@ readiness. Consumers must verify their actual shared-store deployment.
 
 The locked OpenTelemetry commit is fetched from its upstream repository because the Stalwart fork is no longer available. The revision in `Cargo.lock` stays unchanged.
 
+Publication accepts a newer `main` only when the Stalwart recipe, workflow and scan policy are unchanged since the build.
+
 This prepares an image; mx continues to use its existing pinned image. A rebuilt binary will not necessarily match the installed binary byte for byte.
