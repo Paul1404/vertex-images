@@ -1,48 +1,45 @@
 # Vertex images
 
-This repository builds and publishes images for allowlisted public projects. Runtime configuration, secrets and deployment changes stay in private repositories.
+Vertex images builds the containers for several of my websites and services. It produces tested images with traceable source revisions. The private Fleet repositories hold deployment configuration and runtime secrets.
 
-## Public application images
+The repository does not deploy anything itself. Fleet decides which verified digest to run on Vertex; mail remains on its own host.
 
-The current allowlist is `Paul1404/hof-stetten.de` and `Paul1404/untereuerheim.com`, published as `ghcr.io/paul1404/vertex-hofstetten` and `ghcr.io/paul1404/vertex-untereuerheim`.
+## Images
 
-`build.yml` polls every ten minutes and also supports manual and `source-ci-passed` runs. Scheduled runs can be delayed. Immediate source notifications need a scoped GitHub App to send `source-ci-passed`. Its planner ignores dispatch payload refs, resolves an allowlisted repository's current `main` commit, and requires that commit's latest `ci.yml` push run to pass. Only this repository's `main` branch publishes images.
+| Image | Source | Build |
+| --- | --- | --- |
+| `vertex-hofstetten` | [hof-stetten.de](https://github.com/Paul1404/hof-stetten.de) | Static site |
+| `vertex-untereuerheim` | [untereuerheim.com](https://github.com/Paul1404/untereuerheim.com) | Static site |
+| `vertex-cms-sm`, `vertex-cms-svu`, `vertex-cms-wengertsberg` | [CMS recipes](recipes/web-services/) | REDAXO and WordPress sites |
+| `vertex-paperless-ai-hub` | [Paperless AI adapter](recipes/paperless-ai/) | Document extraction adapter |
+| `vertex-stalwart` | [Stalwart recipe](recipes/stalwart/) | Stalwart 0.16.27 with the mx legacy-password patch |
 
-Each workload uses `image.yml`. The build runner checks out the exact source commit with read-only permissions, runs source checks, vulnerability scans and application smoke tests, then saves the tested image. Fixable HIGH and CRITICAL findings block publication. A fresh publisher reuses that image, rechecks the source commit and CI result, publishes an immutable tag of `sha-{source}-recipe-{hub}`, and attests its digest. The publisher check is named `image-{workload} / publish`; Fleet verifies that specific job.
+The Stalwart workflow prepares an image independently of the running mail service.
 
-Pull requests run repository tests and the CMS checks below; they cannot publish. Existing tags are never overwritten. A failed publisher can be rerun while its one-day tested-image artifact remains. If an image was pushed but its attestation failed, do not promote it until the publisher is rerun and provenance verifies. If the artifact has expired, use a new recipe commit. Verify anonymous pulls by digest before enabling Fleet promotion. The `evidence-{workload}` artifact records source and recipe commits, CI runs, image digest, vulnerability report and SBOM.
+## From source to image
 
-`security.yml` scans the newest published digest weekly or by manual dispatch. It verifies the workload's publisher, provenance, source labels and vulnerability policy. The scan pulls the image without running it. It may scan a newer image than the one currently deployed; Fleet's deployed-image checks remain separate.
+For the two static sites, the planner looks for a successful CI run on the source repository's current `main` commit. It checks every ten minutes and can also be triggered manually or by a source notification. The builder checks out that exact commit, runs the source checks, builds the image once, tests it and scans its packages. Fixable high and critical vulnerabilities stop publication.
 
-## CMS images
+A separate publisher takes the tested image, checks that the source hasn't moved, and pushes it to GHCR. Image tags contain both the source and builder commits, and GitHub attests the resulting digest. Fleet checks the publisher and provenance before changing its image pin.
 
-The public CMS recipes are under `recipes/web-services`. `cms.yml` runs secret scanning, source checks and all six fixture contexts. It publishes only the three CMS application images, `vertex-cms-sm`, `vertex-cms-svu` and `vertex-cms-wengertsberg`; the retired Caddy origins remain test fixtures.
+The CMS, Paperless AI and Stalwart recipes live in this repository and have their own workflows. The CMS workflow tests six contexts and publishes the three application images. It also keeps a checksum-verified image archive for each release. The Paperless adapter and Stalwart workflows test and scan their images before publication. Pull requests build and test; only `main` publishes.
 
-Each application is built once. A fresh `cms-image.yml` publisher publishes the tested image, its digest provenance and a recovery archive. Recovery releases are named `cms-{site}-{commit}` and contain the Docker archive, SHA256 checksum and `release.json` metadata. The archive contains image files only. It does not include production data or runtime configuration. Fleet independently verifies the image and archive before updating its desired state. See [the migration record](docs/cms-migration.md) and [the recipe guide](recipes/web-services/README.md).
+The weekly security workflow rescans published static-site and CMS images. It can inspect a newer release than the one Fleet currently runs.
 
-## Maintenance
+## Working here
 
-Run the planner and policy tests with:
+Run the image planner and policy tests:
 
 ```sh
 python3 -m unittest discover -s tests -v
 ```
 
-Run CMS source checks with:
+For changes to the CMS recipes, also run:
 
 ```sh
 bash recipes/web-services/source-checks.sh
 ```
 
-Source and recipe commits are recorded in image tags and labels. The public source Dockerfiles may use mutable base tags or package repositories, so the tag records provenance but does not promise byte-for-byte reproducibility. Public logs, artifacts, image layers and caches must contain no private source, credentials, customer data or deployment configuration.
+The [CMS recipe guide](recipes/web-services/README.md) covers its fixtures and image archives. The [Stalwart recipe](recipes/stalwart/README.md) describes the patched build.
 
-Capacity checked on 2026-11-12: standard public runner compute and GHCR storage
-and bandwidth are free. Concurrent jobs are shared across the account: Free 20,
-GitHub Pro 40, Team 60, Enterprise 500. Public Ubuntu runners have 4 CPUs, 16 GB
-RAM and 14 GB disk; hosted jobs are limited to six hours and matrices to 256 jobs.
-Larger runners are paid. Artifact/cache allowances are separate; tested images
-are retained for one day and reports for fourteen days. See GitHub's
-[limits](https://docs.github.com/en/actions/reference/limits),
-[runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
-[Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
-and [Packages billing](https://docs.github.com/en/billing/concepts/product-billing/github-packages).
+Keep runtime configuration, credentials and private data out of this repository, its build logs and image artifacts. Source and recipe revisions identify what was built; mutable upstream packages can still produce different image bytes on a later rebuild.
