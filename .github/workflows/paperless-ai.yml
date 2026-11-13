@@ -39,6 +39,14 @@ jobs:
           ignore-unfixed: false
           exit-code: '0'
           timeout: 10m
+      - name: Retain scan report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: paperless-ai-vulnerability-report
+          path: image-vulnerabilities.json
+          if-no-files-found: warn
+          retention-days: 14
       - run: python3 scripts/check-image-vulnerabilities.py image-vulnerabilities.json
       - name: Save tested image
         run: docker save vertex-paperless-ai-tested | gzip -1 > "$RUNNER_TEMP/paperless-ai.tar.gz"

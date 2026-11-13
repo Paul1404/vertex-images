@@ -1,5 +1,11 @@
 FROM python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
 
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/local/lib/python3.13/site-packages/pip \
+       /usr/local/lib/python3.13/site-packages/pip-*.dist-info \
+       /usr/local/lib/python3.13/ensurepip \
+    && rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.13
+
 RUN python3 - <<'PY'
 import hashlib, pathlib, tarfile, urllib.request
 url = 'https://registry.npmjs.org/@openai/codex/-/codex-0.167.0-linux-x64.tgz'
