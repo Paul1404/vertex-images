@@ -1,6 +1,12 @@
 # Stalwart image
 
-Builds Stalwart 0.16.27 from upstream commit `aa47d8ef7bfba7200d3293198ac2592747b20e73` with the legacy-password patch used on mx. The workflow runs the patch's synthetic authentication tests, builds the default RocksDB and enterprise features, scans the image and publishes the tested image with provenance.
+Builds Stalwart 0.16.27 from upstream commit `aa47d8ef7bfba7200d3293198ac2592747b20e73` with the legacy-password patch used on mx. The workflow runs the patch's synthetic authentication tests, scans the image and publishes the tested image with provenance.
+
+The release includes PostgreSQL, Redis and S3 in addition to upstream's default
+RocksDB and enterprise features. PostgreSQL provides shared data storage; Redis
+provides shared in-memory storage and coordination; S3 supports shared message
+blobs. Compiling these backends does not configure them or establish cluster
+readiness. Consumers must verify their actual shared-store deployment.
 
 The locked OpenTelemetry commit is fetched from its upstream repository because the Stalwart fork is no longer available. The revision in `Cargo.lock` stays unchanged.
 
