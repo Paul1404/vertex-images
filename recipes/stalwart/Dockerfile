@@ -5,7 +5,8 @@ RUN curl -fsSL --retry 3 -o /tmp/rust.tar.xz https://static.rust-lang.org/dist/r
     && mkdir /tmp/rust && tar -xJf /tmp/rust.tar.xz --strip-components=1 -C /tmp/rust \
     && /tmp/rust/install.sh --prefix=/opt/rust --without=rust-docs \
     && rm -rf /tmp/rust /tmp/rust.tar.xz
-ENV PATH=/opt/rust/bin:$PATH CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+RUN git config --global url.https://github.com/open-telemetry/opentelemetry-rust.insteadOf https://github.com/stalwartlabs/opentelemetry-rust
+ENV PATH=/opt/rust/bin:$PATH CARGO_NET_GIT_FETCH_WITH_CLI=true CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
 WORKDIR /build/stalwart
 COPY source/ ./
 RUN cargo build --locked -p stalwart --no-default-features --features sqlite,enterprise \
