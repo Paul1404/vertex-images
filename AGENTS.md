@@ -19,3 +19,7 @@ CMS contexts are in `recipes/web-services`. Run
 `cms.yml` requires source/secret checks and all six image checks before publishing.
 Keep those PR check names. Historical origins are test fixtures, not deployments.
 `cms-image.yml` publishes the tested archives, signatures and recovery assets.
+
+The Paperless AI adapter is in `recipes/paperless-ai`. Run
+`python3 -m unittest discover -s recipes/paperless-ai/adapter -p 'test_*.py'`.
+Its workflow tests and scans the image before publishing it from main.

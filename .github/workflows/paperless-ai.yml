@@ -1,0 +1,97 @@
+name: paperless-ai
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - recipes/paperless-ai/**
+      - .github/workflows/paperless-ai.yml
+      - scripts/check-image-vulnerabilities.py
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s recipes/paperless-ai/adapter -p 'test_*.py' -v
+      - name: Build and test image
+        run: |
+          docker build --pull --platform linux/amd64 --provenance=false \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "net.pdcd.vertex.recipe=$GITHUB_SHA" \
+            --tag vertex-paperless-ai-tested recipes/paperless-ai
+          docker run --rm --entrypoint /opt/codex/bin/codex vertex-paperless-ai-tested --version | grep -Fx 'codex-cli 0.167.0'
+      - name: Scan image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
+          image-ref: vertex-paperless-ai-tested
+          scanners: vuln
+          format: json
+          output: image-vulnerabilities.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '0'
+          timeout: 10m
+      - name: Retain scan report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: paperless-ai-vulnerability-report
+          path: image-vulnerabilities.json
+          if-no-files-found: warn
+          retention-days: 14
+      - run: python3 scripts/check-image-vulnerabilities.py image-vulnerabilities.json
+      - name: Save tested image
+        run: docker save vertex-paperless-ai-tested | gzip -1 > "$RUNNER_TEMP/paperless-ai.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: tested-paperless-ai
+          path: ${{ runner.temp }}/paperless-ai.tar.gz
+          retention-days: 1
+  publish:
+    needs: build
+    if: github.repository == 'Paul1404/vertex-images' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: tested-paperless-ai
+          path: ${{ runner.temp }}
+      - name: Publish tested image
+        id: image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$GITHUB_SHA"
+          gunzip -c "$RUNNER_TEMP/paperless-ai.tar.gz" | docker load
+          test "$(docker inspect vertex-paperless-ai-tested --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/paul1404/vertex-paperless-ai:hub-$GITHUB_SHA"
+          if docker manifest inspect "$image" >/dev/null 2>&1; then
+            docker pull "$image"
+            test "$(docker inspect vertex-paperless-ai-tested --format '{{.Id}}')" = "$(docker inspect "$image" --format '{{.Id}}')"
+          else
+            docker tag vertex-paperless-ai-tested "$image"
+            docker push "$image"
+          fi
+          echo "digest=$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')" >> "$GITHUB_OUTPUT"
+      - name: Attest image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/paul1404/vertex-paperless-ai
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
