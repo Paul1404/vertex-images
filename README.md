@@ -1,57 +1,48 @@
 # Vertex images
 
-Public build orchestration for allowlisted public application sources. Deployment configuration, runtime secrets and Fleet write access belong in a separate private repository.
+This repository builds and publishes images for allowlisted public projects. Runtime configuration, secrets and deployment changes stay in private repositories.
 
-The allowlisted public static sites are `Paul1404/hof-stetten.de` and `Paul1404/untereuerheim.com`, published as `ghcr.io/paul1404/vertex-hofstetten` and `ghcr.io/paul1404/vertex-untereuerheim`. Hofstetten is the first deployment pilot. During shadow verification, its existing CI, publisher and production promotion gates remain in place until measured evidence supports migration.
+## Public application images
 
-## Delivery contract
+The current allowlist is `Paul1404/hof-stetten.de` and `Paul1404/untereuerheim.com`, published as `ghcr.io/paul1404/vertex-hofstetten` and `ghcr.io/paul1404/vertex-untereuerheim`.
 
-`build.yml` runs manually, on `source-ci-passed` repository dispatch, and on a ten-minute polling schedule. Dispatch payloads never select a repository or source ref. The planner independently resolves the allowlisted repository's current main commit and requires its newest exact-commit `ci.yml` push run to have completed successfully. It rejects private, archived and non-main-default sources. Only main in this hub can publish.
+`build.yml` polls every ten minutes and also supports manual and `source-ci-passed` runs. Scheduled runs can be delayed. Immediate source notifications need a scoped GitHub App to send `source-ci-passed`. Its planner ignores dispatch payload refs, resolves an allowlisted repository's current `main` commit, and requires that commit's latest `ci.yml` push run to pass. Only this repository's `main` branch publishes images.
 
-Each selected workload calls `image.yml` with its trusted planner result and gets its own build and publishing runners. The matrix permits four concurrent workload pipelines and does not cancel other workloads on failure. The caller names each matrix pipeline `image-{workload}` so consumers can verify its `image-{workload} / publish` job independently. Each publisher depends only on its own successful build, so a slow or failed image does not hold back another image. The reusable workflow checks the calling repository, main branch and allowed trigger events before executing source code; its source runner explicitly has read-only permissions. The caller permits the reusable publisher to request package and attestation privileges, while those privileges remain absent from its source runner.
+Each workload uses `image.yml`. The build runner checks out the exact source commit with read-only permissions, runs source checks, vulnerability scans and application smoke tests, then saves the tested image. Fixable HIGH and CRITICAL findings block publication. A fresh publisher reuses that image, rechecks the source commit and CI result, publishes an immutable tag of `sha-{source}-recipe-{hub}`, and attests its digest. The publisher check is named `image-{workload} / publish`; Fleet verifies that specific job.
 
-The source runner checks out an exact full SHA without persisted credentials and has read-only token permissions. It installs pinned Bun 1.3.11, uses the frozen dependency lockfile, and runs dependency audit, source checks, the source's image vulnerability policy, unit tests against built site output and production HTTP smoke checks including origin authentication. Trivy scans all vulnerability severities and generates a CycloneDX SBOM. The source policy blocks fixable HIGH/CRITICAL vulnerabilities and remains authoritative. Publication scans are complemented by weekly and manual `security.yml` scans of the newest trusted public image for each workload. The resolver enumerates published full source/recipe tags and chooses the newest source commit, then recipe commit, that is reachable from both repositories' main branches and has a successful workload-specific publisher job. Aggregate workflow failure or a pending other workload does not block a completed publisher. It resolves and checks the manifest digest, verifies signed provenance bound to that exact recipe and main ref, checks image source/recipe labels, and applies the exact published source's vulnerability policy. The scan pulls by digest and never rebuilds or runs the container. Complete vulnerability report, refreshed SBOM, provenance verification and target metadata are retained for fourteen days. These scans cover the newest published image, which may differ from an older image still deployed by Fleet; deployed-image inventory scanning remains separate. Missing, private or unverifiable packages fail visibly rather than silently skipping coverage. Existing source-repository weekly scans rebuild their own image and remain in place during migration. No runtime secrets or private configuration are supplied.
+Pull requests run repository tests and the CMS checks below; they cannot publish. Existing tags are never overwritten. A failed publisher can be rerun while its one-day tested-image artifact remains. If an image was pushed but its attestation failed, do not promote it until the publisher is rerun and provenance verifies. If the artifact has expired, use a new recipe commit. Verify anonymous pulls by digest before enabling Fleet promotion. The `evidence-{workload}` artifact records source and recipe commits, CI runs, image digest, vulnerability report and SBOM.
 
-A fresh publishing runner downloads the tested image tar from this run. It executes no source scripts, rechecks current main and latest successful source CI, and publishes with this repository's ephemeral `GITHUB_TOKEN`. Packages write and OIDC/attestation privileges exist only in this job. PRs only run read-only planner unit tests and never run publication. There is no `pull_request_target` or PR-triggered privileged workflow.
+`security.yml` scans the newest published digest weekly or by manual dispatch. It verifies the workload's publisher, provenance, source labels and vulnerability policy. The scan pulls the image without running it. It may scan a newer image than the one currently deployed; Fleet's deployed-image checks remain separate.
 
-Tags contain both exact revisions:
+## CMS images
 
+The public CMS recipes are under `recipes/web-services`. `cms.yml` runs secret scanning, source checks and all six fixture contexts. It publishes only the three CMS application images, `vertex-cms-sm`, `vertex-cms-svu` and `vertex-cms-wengertsberg`; the retired Caddy origins remain test fixtures.
+
+Each application is built once. A fresh `cms-image.yml` publisher publishes the tested image, its digest provenance and a recovery archive. Recovery releases are named `cms-{site}-{commit}` and contain the Docker archive, SHA256 checksum and `release.json` metadata. The archive contains image files only. It does not include production data or runtime configuration. Fleet independently verifies the image and archive before updating its desired state. See [the migration record](docs/cms-migration.md) and [the recipe guide](recipes/web-services/README.md).
+
+## Maintenance
+
+Run the planner and policy tests with:
+
+```sh
+python3 -m unittest discover -s tests -v
 ```
-sha-{40-character-source-commit}-recipe-{40-character-hub-commit}
+
+Run CMS source checks with:
+
+```sh
+bash recipes/web-services/source-checks.sh
 ```
 
-Existing tags are never overwritten. A failed publisher job can be rerun while its one-day tested-image artifact remains: an existing remote image is reused only if its config digest matches the tested tar, allowing missing provenance to be repaired. If artifacts expired, retain the existing tag and use a new reviewed recipe commit. A manifest published before an attestation failure is skipped by later polling; rerun that failed publisher explicitly and do not promote it until provenance is present.
+Source and recipe commits are recorded in image tags and labels. The public source Dockerfiles may use mutable base tags or package repositories, so the tag records provenance but does not promise byte-for-byte reproducibility. Public logs, artifacts, image layers and caches must contain no private source, credentials, customer data or deployment configuration.
 
-Publication produces signed GitHub build provenance on the image digest. The source revision and repository are OCI labels, and `net.pdcd.vertex.recipe` records this hub's revision. The provenance signer is `.github/workflows/image.yml` and attests the hub workflow and recipe, not a checkout of the application as the workflow repository. The `evidence-{workload}` artifact contains `delivery.json` associating source SHA, recipe SHA, source CI run, hub run and digest, plus full vulnerability report and SBOM. Fleet must independently verify that association, trusted workflow/main/run success, exact source CI success and the signed digest before changing its pinned image. The hub holds no Fleet credential.
-
-Package visibility defaults to private on first publication. Explicitly make only this public-source pilot package public, then verify an anonymous pull by digest before enabling Fleet adoption. Public repo visibility does not establish public package visibility.
-
-## Reproducibility and privacy boundaries
-
-Exact source, recipe, lockfile and action commits provide traceability. The inherited source Dockerfile currently uses mutable base tags and package upgrades; this pilot does not claim byte-for-byte reproducibility. Pin bases by digest and snapshot package inputs in a reviewed source change before claiming it. A source plus recipe pair is built once and reused by digest.
-
-Private application sources and private platform adapters remain in private build workflows, which may call reviewed shared logic but retain private runners' billing and visibility boundaries. Do not copy private source, build inputs, config, credentials or customer data here for free capacity. Public logs, artifacts, SBOMs, image layers and caches are public disclosure surfaces. No private repository token is installed here. Build secrets, if ever required, need a separate private workflow and BuildKit secret mounts rather than build arguments or copied files.
-
-The ten-minute poll avoids cross-repository credentials. For faster source notification, a narrowly scoped GitHub App may dispatch `source-ci-passed` after trusted main CI; store its private key only in the trusted source notification job and restrict its installation to this hub. Do not give notification credentials to PR jobs. The planner ignores payload refs and repeats all trust checks. Scheduled Actions can be delayed and are not a delivery SLA.
-
-## Capacity and costs
-
-Standard public GitHub-hosted runner compute is currently free. It is subject to plan concurrency limits: Free 20, GitHub Pro 40, Team 60, Enterprise 500, shared with other workloads of the account. GPT Pro does not change GitHub's plan. Standard public Ubuntu runners currently provide 4 CPUs, 16 GB RAM and 14 GB disk. Hosted jobs have a six-hour hard maximum and matrices a 256-job maximum. Larger runners are billed even for public repositories. GHCR container storage and bandwidth are currently free, while Actions artifact/cache storage has separate limits. This pilot keeps image artifacts for one day and evidence for fourteen days.
-
-Verified against official documentation on 2026-11-12: [limits](https://docs.github.com/en/actions/reference/limits), [runner capacity](https://docs.github.com/en/actions/reference/runners/github-hosted-runners), [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions), [Packages billing](https://docs.github.com/en/billing/concepts/product-billing/github-packages), [secure use](https://docs.github.com/en/actions/reference/security/secure-use).
-
-## Verification and measurement
-
-Run `python3 -m unittest discover -s tests -v`. Tests cover exact successful main selection, untrusted events, changed SHA, pending/newer failed runs, wrong workflow/repository, private sources, unknown workloads and deduplication.
-
-Record source commit time, upstream CI start/end, hub queue/build/publish start/end, Fleet promotion commit and live readiness separately. Report wall time and runner job time; compare equivalent cold/warm runs before removing duplicated image work. Polling overhead, source CI and independent production gates remain part of delivery latency. A successful build alone does not establish deployment or a speedup.
-
-## Owned CMS recipes
-
-The reviewed public CMS build contexts, managed theme and isolated fixtures are owned here under `recipes/web-services`. See [the migration record](docs/cms-migration.md). `cms.yml` preserves secret scanning, source checks and all six original image fixture checks. Every PR runs those required contexts; main builds run on relevant recipe, policy or CMS workflow changes, and can also be dispatched manually. CMS application publication waits for all six fixtures and both source gates, preserving the original cross-image release gate. Retired origin contexts are tested and never published or deployed.
-
-Each application is built once and the exact tested tar is passed to a fresh `cms-image.yml` publisher. It verifies source/revision/context labels and refuses tag overwrites. CMS source and recipe revisions are both this repository's full commit SHA. The public packages are `vertex-cms-sm`, `vertex-cms-svu` and `vertex-cms-wengertsberg`. No Fleet credential or promotion script is present here.
-
-The publisher also stores the same tested Docker archive in a public GitHub release named `cms-{site}-{commit}`, with its SHA256 checksum and `release.json` containing the archive URL, archive checksum, container config ID, GHCR digest and source/recipe revisions. Existing release assets are compared and never overwritten. These recovery archives contain container image files only, with no production database, media or runtime configuration. Fresh publishers have repository write permission for releases; source and PR jobs remain read-only. Fleet keeps its independent desired-state checks and runtime recovery metadata.
-
-CMS images join the weekly digest scan catalog using their own `cms.yml` publication jobs, `cms-image.yml` signer and this repository's exact-commit vulnerability policy. Fixable HIGH/CRITICAL vulnerabilities block publication; unfixed HIGH/CRITICAL findings remain visible with warnings and complete reports. Docker Dependabot covers all six contexts with compatible WordPress and Caddy groups. Inherited mutable base tags and package downloads remain a reproducibility limit until separately reviewed and pinned.
+Capacity checked on 2026-11-12: standard public runner compute and GHCR storage
+and bandwidth are free. Concurrent jobs are shared across the account: Free 20,
+GitHub Pro 40, Team 60, Enterprise 500. Public Ubuntu runners have 4 CPUs, 16 GB
+RAM and 14 GB disk; hosted jobs are limited to six hours and matrices to 256 jobs.
+Larger runners are paid. Artifact/cache allowances are separate; tested images
+are retained for one day and reports for fourteen days. See GitHub's
+[limits](https://docs.github.com/en/actions/reference/limits),
+[runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners),
+[Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+and [Packages billing](https://docs.github.com/en/billing/concepts/product-billing/github-packages).

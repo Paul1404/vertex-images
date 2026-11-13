@@ -1,7 +1,6 @@
 FROM wordpress:7.1.3
 
-# Refresh Debian security fixes for each reviewed source commit. Preserve the
-# upstream PHP/Apache configuration while updating its distribution packages.
+# Use the source commit to refresh the package-update layer.
 ARG SECURITY_REBUILD=local
 RUN test -n "$SECURITY_REBUILD" \
     && apt-get update -o APT::Update::Error-Mode=any \

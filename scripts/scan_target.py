@@ -1,4 +1,4 @@
-"""Resolve the newest published public source/recipe pair, never build an image."""
+"""Find the latest published image and its source revision."""
 import hashlib
 import json
 import os
@@ -77,7 +77,7 @@ def resolve(name, fetch=api, registry_factory=PublicRegistry):
         recipe_date = fetch(f"repos/{HUB}/commits/{recipe}")["commit"]["committer"]["date"]
         candidates.append((source_date, recipe_date, tag, source, recipe))
     for _, _, tag, source, recipe in sorted(candidates, reverse=True):
-        # A scan accepts historical published commits, never arbitrary PR branches.
+        # Only scan commits reachable from main.
         if any(fetch(f"repos/{repository}/compare/{sha}...main")["status"] not in ("ahead", "identical") for repository, sha in ((repo, source), (HUB, recipe))):
             continue
         runs = fetch(f"repos/{HUB}/actions/workflows/{entry['build_workflow']}/runs?branch=main&head_sha={recipe}&per_page=100")["workflow_runs"]
@@ -94,7 +94,7 @@ def resolve(name, fetch=api, registry_factory=PublicRegistry):
         if not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
             raise ValueError("Invalid manifest digest")
         return {"name": name, "repository": repo, "source_sha": source, "recipe_sha": recipe, "tag": tag, "image": entry["image"] + "@" + digest, "signer_workflow": entry["signer_workflow"], "policy_path": entry["policy_path"], "context": entry.get("context", "")}
-    raise ValueError("No trusted published source/recipe pair; publish and verify this public package first")
+    raise ValueError("No trusted published image found; publish the package before scanning")
 
 
 if __name__ == "__main__":

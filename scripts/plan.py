@@ -1,4 +1,4 @@
-"""Resolve a closed allowlist against independently verified successful main CI."""
+"""Select public source commits whose latest main CI passed."""
 import json
 import os
 import re
@@ -32,7 +32,7 @@ def tag_for(sha, recipe):
 
 
 def published(image, tag):
-    """Public-only registry read. Never fetch a credential or private package."""
+    """Check whether the image tag is publicly readable."""
     package = image.removeprefix("ghcr.io/")
     try:
         with urllib.request.urlopen("https://ghcr.io/token?service=ghcr.io&scope=repository:" + package + ":pull", timeout=30) as response:
