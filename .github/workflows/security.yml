@@ -22,20 +22,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Resolve published immutable image
+      - name: Find published image
         id: target
         env:
           GH_TOKEN: ${{ github.token }}
           WORKLOAD: ${{ matrix.workload }}
         run: python3 scripts/scan_target.py "$WORKLOAD"
-      - name: Verify trusted digest provenance
+      - name: Verify image provenance
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ${{ steps.target.outputs.image }}
           RECIPE_SHA: ${{ steps.target.outputs.recipe_sha }}
           SIGNER_WORKFLOW: ${{ steps.target.outputs.signer_workflow }}
         run: gh attestation verify "oci://$IMAGE" --repo Paul1404/vertex-images --signer-workflow "Paul1404/vertex-images/.github/workflows/$SIGNER_WORKFLOW" --signer-digest "$RECIPE_SHA" --source-digest "$RECIPE_SHA" --source-ref refs/heads/main --deny-self-hosted-runners --format json > provenance-verification.json
-      - name: Pull and verify source labels without running image
+      - name: Check image labels
         env:
           IMAGE: ${{ steps.target.outputs.image }}
           SOURCE_REPO: ${{ steps.target.outputs.repository }}
@@ -56,7 +56,7 @@ jobs:
           ref: ${{ steps.target.outputs.source_sha }}
           path: source
           persist-credentials: false
-      - name: Scan every vulnerability severity on the published digest
+      - name: Scan vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.76.1
@@ -68,7 +68,7 @@ jobs:
           ignore-unfixed: false
           exit-code: '0'
           timeout: 10m
-      - name: Refresh SBOM from immutable published image
+      - name: Generate SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.76.1
@@ -77,11 +77,11 @@ jobs:
           output: sbom.cdx.json
           scanners: vuln
           exit-code: '0'
-      - name: Apply the exact published source vulnerability policy
+      - name: Check vulnerability report
         env:
           POLICY_PATH: ${{ steps.target.outputs.policy_path }}
         run: python3 "source/$POLICY_PATH" image-vulnerabilities.json
-      - name: Retain complete report and exact scan target
+      - name: Upload scan reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

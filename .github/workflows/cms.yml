@@ -72,7 +72,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Build one exact recipe image
+      - name: Build image
         env:
           CONTEXT: recipes/web-services/${{ matrix.directory }}
         run: |
@@ -83,12 +83,12 @@ jobs:
             --label "net.pdcd.vertex.recipe=$GITHUB_SHA" \
             --label "net.pdcd.vertex.context=$CONTEXT" \
             --tag vertex-tested "$CONTEXT"
-      - name: Exercise original isolated production fixtures
+      - name: Run image fixtures
         working-directory: recipes/web-services
         env:
           DIRECTORY: ${{ matrix.directory }}
         run: python3 tests/release-smoke.py "$DIRECTORY" vertex-tested
-      - name: Scan all image vulnerabilities
+      - name: Scan vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.76.1
@@ -100,7 +100,7 @@ jobs:
           ignore-unfixed: false
           exit-code: '0'
           timeout: 10m
-      - name: Enforce reviewed fixable high and critical vulnerability policy
+      - name: Check vulnerability report
         run: python3 scripts/check-image-vulnerabilities.py image-vulnerabilities.json
       - name: SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -111,7 +111,7 @@ jobs:
           output: sbom.cdx.json
           scanners: vuln
           exit-code: '0'
-      - name: Retain complete scan evidence
+      - name: Upload scan reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -121,13 +121,13 @@ jobs:
             sbom.cdx.json
           retention-days: 14
           if-no-files-found: warn
-      - name: Save exact tested application image
+      - name: Save tested image
         if: matrix.publish && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
           mkdir -p /tmp/vertex-result
           docker save vertex-tested | gzip -1 > /tmp/vertex-result/image.tar.gz
           cp image-vulnerabilities.json sbom.cdx.json /tmp/vertex-result/
-      - name: Share tested application image with fresh publisher
+      - name: Upload tested image
         if: matrix.publish && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

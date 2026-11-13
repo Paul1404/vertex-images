@@ -1,4 +1,4 @@
-"""Regression tests for the CMS image vulnerability publication gate."""
+"""Tests for the image vulnerability policy."""
 import json
 import pathlib
 import subprocess

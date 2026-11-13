@@ -1,7 +1,21 @@
 # Vertex images guidance
 
-This public repository accepts only explicit public-source allowlists. Never add private source inputs, Fleet write credentials, customer data or runtime secrets. Preserve source main CI and vulnerability gates. PR workflows are read-only; publishing is main-only on fresh runners using ephemeral package credentials. Use full verified action commit SHAs, not annotated tag object IDs.
+Build only allowlisted public sources. Keep private inputs, runtime secrets and
+Fleet credentials out of this repository. Source and PR jobs are read-only;
+publish from main on a separate runner. Preserve source CI and vulnerability
+gates. Pin actions to commit SHAs, not annotated tag IDs.
 
-Run `python3 -m unittest discover -s tests -v`. Orchestration lives in `.github/workflows/build.yml`; each independent build and publishing pipeline lives in reusable `.github/workflows/image.yml`; planner and allowlist live in `scripts/plan.py`. Tags identify full source and recipe revisions and must never be overwritten. Production promotion belongs to the private Fleet repository and pins verified image digests. Weekly/manual `security.yml` pulls and scans published immutable digests without rebuilding or publishing. Its resolver is `scripts/scan_target.py` and must verify the specific workload publisher, never aggregate workflow success. Document measured delivery results without assuming speedup or byte reproducibility.
+`build.yml` plans external-source builds through `scripts/plan.py` and calls
+`image.yml` for each workload. Keep source and recipe commits in tags and never
+overwrite them. Consumers check each workload's publisher job, not the combined
+workflow result. Private Fleet owns digest promotion.
 
-Owned CMS contexts are under `recipes/web-services`; run `bash recipes/web-services/source-checks.sh`. `cms.yml` preserves secrets, source checks and all six historical image fixture contexts before any application publication. All PRs must produce those contexts. Historical origin recipes are verification fixtures and must never be published or revived. Fresh `cms-image.yml` publishers reuse tested archives, publish digest provenance and immutable recovery release assets, and hold no Fleet credential. CMS scan entries belong to `SCAN_CATALOG` in `scripts/scan_target.py`, not the external-source build planner allowlist.
+`security.yml` scans published digests weekly and on demand. Its resolver is
+`scripts/scan_target.py`; CMS entries go in `SCAN_CATALOG`, not the external
+build allowlist. Run `python3 -m unittest discover -s tests -v` after edits.
+
+CMS contexts are in `recipes/web-services`. Run
+`bash recipes/web-services/source-checks.sh` and the affected image fixtures.
+`cms.yml` requires source/secret checks and all six image checks before publishing.
+Keep those PR check names. Historical origins are test fixtures, not deployments.
+`cms-image.yml` publishes the tested archives, signatures and recovery assets.
