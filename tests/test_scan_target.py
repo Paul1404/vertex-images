@@ -60,6 +60,33 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(result['source_sha'], result['recipe_sha'])
         self.assertEqual(result['context'], 'recipes/web-services/railway-svu-wordpress')
 
+    def test_hub_recipes_use_their_own_publishers(self):
+        class HubRegistry:
+            def tags(self):
+                return ['latest', 'hub-short', 'hub-' + RECIPE]
+            def digest(self, tag):
+                assert tag == 'hub-' + RECIPE
+                return DIGEST
+        for name in ('paperless-ai', 'stalwart'):
+            for trusted in (True, False):
+                def fetch(path):
+                    if '/runs?' in path:
+                        self.assertIn('/' + name + '.yml/', path)
+                        return {'workflow_runs': [{'path': '.github/workflows/' + name + '.yml', 'head_sha': RECIPE, 'head_branch': 'main', 'event': 'push', 'id': 345, 'head_repository': {'full_name': scan_target.HUB}}]}
+                    if '/jobs?' in path:
+                        return {'jobs': [{'name': 'publish', 'status': 'completed', 'conclusion': 'success' if trusted else 'failure'}]}
+                    return self.fetch(path)
+                if trusted:
+                    result = scan_target.resolve(name, fetch=fetch, registry_factory=lambda _: HubRegistry())
+                    self.assertEqual(result['source_sha'], RECIPE)
+                    self.assertEqual(result['recipe_sha'], RECIPE)
+                    self.assertEqual(result['signer_workflow'], name + '.yml')
+                    self.assertEqual(result['recipe_label'], 'org.opencontainers.image.revision' if name == 'stalwart' else 'net.pdcd.vertex.recipe')
+                    self.assertEqual(result['policy_path'], 'scripts/check-image-vulnerabilities.py')
+                else:
+                    with self.assertRaisesRegex(ValueError, 'No trusted published'):
+                        scan_target.resolve(name, fetch=fetch, registry_factory=lambda _: HubRegistry())
+
     def test_cms_rejects_mixed_source_recipe(self):
         with self.assertRaisesRegex(ValueError, 'No trusted published'):
             scan_target.resolve('cms-sm', fetch=self.fetch, registry_factory=lambda _: Registry())

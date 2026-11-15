@@ -9,9 +9,11 @@ import urllib.request
 
 from plan import ALLOWLIST, api
 
+HUB_TAG = re.compile(r"hub-([a-f0-9]{40})")
 TAG = re.compile(r"sha-([a-f0-9]{40})-recipe-([a-f0-9]{40})")
 HUB = "Paul1404/vertex-images"
 SCAN_CATALOG = {
+    **{name: {"repository": HUB, "image": "ghcr.io/paul1404/vertex-" + image, "build_workflow": name + ".yml", "publisher_job": "publish", "signer_workflow": name + ".yml", "policy_path": "scripts/check-image-vulnerabilities.py", "events": ("push", "workflow_dispatch"), "hub_tag": True} for name, image in (("paperless-ai", "paperless-ai-hub"), ("stalwart", "stalwart"))},
     **{name: {**entry, "build_workflow": "build.yml", "publisher_job": f"image-{name} / publish", "signer_workflow": "image.yml", "policy_path": "scripts/check-image-vulnerabilities.py", "events": ("schedule", "workflow_dispatch", "repository_dispatch")} for name, entry in ALLOWLIST.items()},
     **{f"cms-{site}": {"repository": HUB, "image": f"ghcr.io/paul1404/vertex-cms-{site}", "build_workflow": "cms.yml", "publisher_job": f"publish-cms-{site} / publish", "signer_workflow": "cms-image.yml", "policy_path": "scripts/check-image-vulnerabilities.py", "events": ("push", "workflow_dispatch"), "context": "recipes/web-services/" + {"sm": "railway-sm-redaxo", "svu": "railway-svu-wordpress", "wengertsberg": "railway-wengertsberg-wordpress"}[site]} for site in ("sm", "svu", "wengertsberg")},
 }
@@ -67,10 +69,10 @@ def resolve(name, fetch=api, registry_factory=PublicRegistry):
     registry = registry_factory(entry["image"])
     candidates = []
     for tag in registry.tags():
-        match = TAG.fullmatch(tag)
+        match = (HUB_TAG if entry.get("hub_tag") else TAG).fullmatch(tag)
         if not match:
             continue
-        source, recipe = match.groups()
+        source, recipe = (match[1], match[1]) if entry.get("hub_tag") else match.groups()
         if repo == HUB and source != recipe:
             continue
         source_date = fetch(f"repos/{repo}/commits/{source}")["commit"]["committer"]["date"]
@@ -93,7 +95,7 @@ def resolve(name, fetch=api, registry_factory=PublicRegistry):
         digest = registry.digest(tag)
         if not re.fullmatch(r"sha256:[a-f0-9]{64}", digest):
             raise ValueError("Invalid manifest digest")
-        return {"name": name, "repository": repo, "source_sha": source, "recipe_sha": recipe, "tag": tag, "image": entry["image"] + "@" + digest, "signer_workflow": entry["signer_workflow"], "policy_path": entry["policy_path"], "context": entry.get("context", "")}
+        return {"name": name, "repository": repo, "source_sha": source, "recipe_sha": recipe, "tag": tag, "image": entry["image"] + "@" + digest, "signer_workflow": entry["signer_workflow"], "policy_path": entry["policy_path"], "context": entry.get("context", ""), "recipe_label": "org.opencontainers.image.revision" if name == "stalwart" else "net.pdcd.vertex.recipe"}
     raise ValueError("No trusted published image found; publish the package before scanning")
 
 

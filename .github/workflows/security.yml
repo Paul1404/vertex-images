@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        workload: [hofstetten, untereuerheim, cms-sm, cms-svu, cms-wengertsberg]
+        workload: [hofstetten, untereuerheim, cms-sm, cms-svu, cms-wengertsberg, paperless-ai, stalwart]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -42,11 +42,12 @@ jobs:
           EXPECTED_CONTEXT: ${{ steps.target.outputs.context }}
           SOURCE_SHA: ${{ steps.target.outputs.source_sha }}
           RECIPE_SHA: ${{ steps.target.outputs.recipe_sha }}
+          RECIPE_LABEL: ${{ steps.target.outputs.recipe_label }}
         run: |
           docker pull "$IMAGE"
           test "$(docker inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "https://github.com/$SOURCE_REPO"
           test "$(docker inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$SOURCE_SHA"
-          test "$(docker inspect "$IMAGE" --format '{{index .Config.Labels "net.pdcd.vertex.recipe"}}')" = "$RECIPE_SHA"
+          test "$(docker inspect "$IMAGE" --format "{{index .Config.Labels \"$RECIPE_LABEL\"}}")" = "$RECIPE_SHA"
           if [ -n "$EXPECTED_CONTEXT" ]; then
             test "$(docker inspect "$IMAGE" --format '{{index .Config.Labels "net.pdcd.vertex.context"}}')" = "$EXPECTED_CONTEXT"
           fi
