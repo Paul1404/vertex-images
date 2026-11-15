@@ -1,4 +1,4 @@
-FROM docker.io/rockylinux/rockylinux@sha256:827d37bc128288ccf160ee318bb3cb92d591164cb217e92f8bc61e3982ae1834 AS build
+FROM docker.io/rockylinux/rockylinux@sha256:fc370d748f4cd1e6ac3d1b6460fb82201897fa15a16f43e947940df5aca1a56e AS build
 RUN dnf -y install ca-certificates clang clang-devel cmake curl gcc gcc-c++ git make openssl-devel perl pkgconf-pkg-config python3 xz && dnf clean all
 RUN curl -fsSL --retry 3 -o /tmp/rust.tar.xz https://static.rust-lang.org/dist/rust-1.99.1-x86_64-unknown-linux-gnu.tar.xz \
     && echo '231fcae47ee950621374725b5fc3b5441d2fbda2955ac45dd7dc816d8876cfe7  /tmp/rust.tar.xz' | sha256sum -c - \
@@ -15,7 +15,7 @@ RUN cargo build --locked -p stalwart --no-default-features --features sqlite,ent
     && python3 -m unittest discover -s tools -p test_legacy_password_import.py -v \
     && cargo build --locked --release -p stalwart --features postgres,redis,s3
 
-FROM docker.io/rockylinux/rockylinux@sha256:827d37bc128288ccf160ee318bb3cb92d591164cb217e92f8bc61e3982ae1834
+FROM docker.io/rockylinux/rockylinux@sha256:fc370d748f4cd1e6ac3d1b6460fb82201897fa15a16f43e947940df5aca1a56e
 RUN dnf -y upgrade && dnf -y install libstdc++ libgcc ca-certificates libcap && dnf clean all
 COPY --from=build /build/stalwart/target/release/stalwart /usr/local/bin/stalwart
 RUN ldd /usr/local/bin/stalwart && chmod 0755 /usr/local/bin/stalwart \
