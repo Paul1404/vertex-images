@@ -7,8 +7,11 @@ updates:
     groups:
       github-actions:
         patterns: ['*']
+        update-types: [minor, patch]
   - package-ecosystem: docker
     directories:
+      - /recipes/paperless-ai
+      - /recipes/stalwart
       - /recipes/web-services/railway-sm-redaxo
       - /recipes/web-services/railway-sm-redaxo-origin
       - /recipes/web-services/railway-svu-wordpress
@@ -23,6 +26,8 @@ updates:
     groups:
       caddy:
         patterns: ['caddy']
+        update-types: [minor, patch]
       wordpress:
         patterns: ['wordpress']
+        update-types: [minor, patch]
     open-pull-requests-limit: 5
