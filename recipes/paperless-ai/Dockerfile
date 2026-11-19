@@ -1,4 +1,4 @@
-FROM python:3.13-slim@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/* \
     && rm -rf /usr/local/lib/python3.13/site-packages/pip \
