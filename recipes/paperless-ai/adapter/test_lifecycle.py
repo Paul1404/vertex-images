@@ -13,7 +13,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 from test_adapter import adapter
 from test_invoice_metadata import metadata, TEXT
 
@@ -37,11 +37,30 @@ class LifecycleTests(unittest.TestCase):
             model.assert_not_called()
 
     def test_ledger_failure_does_not_cache_success_or_leak_capacity(self):
-        with tempfile.TemporaryDirectory() as d, patch.object(adapter,'WORK',Path(d)), patch.object(adapter,'record',side_effect=RuntimeError('ledger failed')), patch.object(adapter.subprocess,'Popen',side_effect=RuntimeError('model failed')):
+        model=Mock(returncode=0)
+        model.communicate.return_value=(json.dumps({'type':'item.completed','item':{'type':'agent_message','text':'{"text":"fixture"}'}}).encode(),None)
+        with tempfile.TemporaryDirectory() as d, patch.object(adapter,'WORK',Path(d)), patch.object(adapter,'record',side_effect=RuntimeError('ledger failed')) as ledger, patch.object(adapter.subprocess,'Popen',return_value=model):
             (Path(d)/'work').mkdir()
-            with self.assertRaises(RuntimeError):adapter.infer('ledger failure fixture',False)
+            key=adapter.hashlib.sha256(b'Falseledger failure fixture').hexdigest()
+            with self.assertRaisesRegex(RuntimeError,'ledger failed'):adapter.infer('ledger failure fixture',False)
+            self.assertNotIn(key,adapter.CACHE)
+            ledger.assert_called_once()
             self.assertTrue(adapter.WORKER.acquire(False));adapter.WORKER.release()
             self.assertTrue(adapter.ADMISSION.acquire(False));adapter.ADMISSION.release()
+
+    def test_absolute_connection_deadline_bounds_slow_client(self):
+        with patch.object(adapter,'CONNECTION_DEADLINE',.1):
+            server=adapter.Server(('127.0.0.1',0),adapter.Handler)
+            thread=adapter.threading.Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                with socket.create_connection(server.server_address) as client:
+                    client.sendall(b'GET /live HTTP/1.1\r\nX-Slow: ')
+                    client.settimeout(1)
+                    self.assertEqual(client.recv(1),b'')
+            finally:
+                server.shutdown();server.server_close();thread.join(timeout=1)
+            self.assertFalse(thread.is_alive())
 
     def test_sigterm_joins_active_cancels_queued_and_retry_conserves_ledger(self):
         self.exercise(False)

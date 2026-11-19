@@ -232,6 +232,10 @@ class Handler(BaseHTTPRequestHandler):
         try:super().finish()
         finally:self.deadline.cancel()
 
+    def handle(self):
+        try:super().handle()
+        except (ConnectionError,TimeoutError):pass
+
     def log_message(self,*args):pass
 
     def send_json(self,status,value):
