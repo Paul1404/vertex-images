@@ -134,6 +134,17 @@ def command(schema_path):
             '-c','features.apps=false','-c','features.memories=false','-c','history.persistence="none"',
             '--output-schema',str(schema_path),'-']
 
+def protect_auth_metadata():
+    # Kubernetes fsGroup can add group write on reattachment. Keep the original
+    # owner/file and restore owner-only permissions without reading credentials.
+    auth=HOME/'codex/auth.json'
+    try:metadata=auth.lstat()
+    except FileNotFoundError:return
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid!=os.getuid():
+        raise RuntimeError('Unexpected credential owner or file type')
+    auth.chmod(0o600)
+
+
 def initialize_ledger():
     with sqlite3.connect(WORK/'usage.sqlite',timeout=2) as db:
         db.execute('CREATE TABLE IF NOT EXISTS requests(at TEXT, outcome TEXT, duration_ms INTEGER,input_tokens INTEGER,output_tokens INTEGER,cached_input_tokens INTEGER)')
@@ -310,6 +321,7 @@ def serve(address=('0.0.0.0',18766)):
     os.umask(0o077)
     (HOME/'codex').mkdir(parents=True,exist_ok=True,mode=0o700)
     (WORK/'work').mkdir(parents=True,exist_ok=True,mode=0o700)
+    protect_auth_metadata()
     initialize_ledger()
     server=Server(address,Handler)
     def terminate(signum,frame):
