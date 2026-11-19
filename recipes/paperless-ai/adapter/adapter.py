@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
 import socketserver
 import sqlite3
 import subprocess
@@ -29,6 +30,9 @@ ADMISSION = threading.BoundedSemaphore(3)
 STATE = threading.Lock()
 COUNTERS = collections.Counter()
 CACHE = collections.OrderedDict()
+DRAINING = threading.Event()
+IO_TIMEOUT = 5
+QUEUE_TIMEOUT = 20
 ARRAYS = {
     'tags':('string',8), 'matched_tags':('string',8), 'tag_ids':('integer',10),
     'correspondents':('string',4), 'matched_correspondents':('string',4), 'correspondent_ids':('integer',10),
@@ -128,6 +132,30 @@ def command(schema_path):
             '-c','features.apps=false','-c','features.memories=false','-c','history.persistence="none"',
             '--output-schema',str(schema_path),'-']
 
+def initialize_ledger():
+    with sqlite3.connect(WORK/'usage.sqlite',timeout=2) as db:
+        db.execute('CREATE TABLE IF NOT EXISTS requests(at TEXT, outcome TEXT, duration_ms INTEGER,input_tokens INTEGER,output_tokens INTEGER,cached_input_tokens INTEGER)')
+
+
+def readiness():
+    # Metadata only: never parse credentials or invoke the model to probe health.
+    try:
+        auth=(HOME/'codex/auth.json').stat()
+        credential_ready=(stat.S_ISREG(auth.st_mode) and auth.st_size>0
+                          and stat.S_IMODE(auth.st_mode)==0o600
+                          and auth.st_uid==os.getuid())
+        state_ready=all(os.access(path,os.W_OK|os.X_OK) for path in (WORK,WORK/'work'))
+        with sqlite3.connect((WORK/'usage.sqlite').as_uri()+'?mode=ro',uri=True,timeout=1) as db:
+            db.execute('PRAGMA schema_version').fetchone()
+        with STATE:state_ready=state_ready and not COUNTERS['usage_errors']
+    except (OSError,sqlite3.Error):
+        credential_ready=False
+        state_ready=False
+    return {'ready':not DRAINING.is_set() and credential_ready and state_ready,
+            'credential_ready':credential_ready,'state_ready':state_ready,
+            'draining':DRAINING.is_set()}
+
+
 def record(outcome,started,usage):
     with STATE:COUNTERS[outcome]+=1
     try:
@@ -137,8 +165,10 @@ def record(outcome,started,usage):
             db.execute('INSERT INTO requests VALUES(?,?,?,?,?,?)',(datetime.datetime.now(datetime.timezone.utc).isoformat(),outcome,round((time.monotonic()-started)*1000),u.get('input_tokens'),u.get('output_tokens'),u.get('cached_input_tokens')))
     except sqlite3.Error:
         with STATE:COUNTERS['usage_errors']+=1
+        raise RuntimeError('Usage recording unavailable') from None
 
 def infer(content,classification):
+    if DRAINING.is_set():raise RuntimeError('Draining')
     started=time.monotonic(); usage=None; outcome='failed'; acquired=False
     key=hashlib.sha256((str(classification)+content).encode()).hexdigest()
     with STATE:
@@ -148,8 +178,13 @@ def infer(content,classification):
             return cached[1],None
     if not ADMISSION.acquire(blocking=False):raise RuntimeError('Busy')
     try:
-        acquired=WORKER.acquire(timeout=20)
-        if not acquired:outcome='busy';raise RuntimeError('Busy')
+        deadline=time.monotonic()+QUEUE_TIMEOUT
+        while not acquired:
+            if DRAINING.is_set():outcome='interrupted';raise RuntimeError('Draining')
+            remaining=deadline-time.monotonic()
+            if remaining<=0:outcome='busy';raise RuntimeError('Busy')
+            acquired=WORKER.acquire(timeout=min(.1,remaining))
+        if DRAINING.is_set():outcome='interrupted';raise RuntimeError('Draining')
         with tempfile.TemporaryDirectory(dir=WORK/'work') as directory:
             path=Path(directory)/'schema.json';path.write_text(json.dumps(schema(classification)))
             instruction=INVOICE_INSTRUCTION if classification=='invoice_metadata' else INSTRUCTION
@@ -158,20 +193,25 @@ def infer(content,classification):
             p=subprocess.Popen(command(path),cwd=directory,env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
             try:output,_=p.communicate(prompt.encode(),timeout=TIMEOUT)
             except subprocess.TimeoutExpired:
-                os.killpg(p.pid,signal.SIGKILL);p.communicate();outcome='timeout';raise RuntimeError('Timeout') from None
+                try:os.killpg(p.pid,signal.SIGKILL)
+                except ProcessLookupError:pass
+                p.communicate();outcome='timeout';raise RuntimeError('Timeout') from None
             text,usage=parse_events(output)
             if p.returncode:raise RuntimeError('Model unavailable')
             if classification=='invoice_metadata':value=checked_metadata(json.loads(text or 'null'),json.loads(content)['document'])
             else:value=validate(json.loads(text or 'null'),classification)
+        record('completed',started,usage)
+        outcome=None
         with STATE:
             CACHE[key]=(time.monotonic(),value,usage)
             while len(CACHE)>64:CACHE.popitem(last=False)
-        outcome='completed'
         return value,usage
     finally:
-        if acquired:WORKER.release()
-        ADMISSION.release()
-        record(outcome,started,usage)
+        try:
+            if outcome is not None:record(outcome,started,usage)
+        finally:
+            if acquired:WORKER.release()
+            ADMISSION.release()
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
@@ -181,13 +221,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
 
     def do_GET(self):
-        if self.path=='/health':
+        if self.path in ('/ready','/health'):
+            state=readiness()
+            self.send_json(200 if state['ready'] else 503,state)
+        elif self.path=='/live':
             with STATE:counters=dict(COUNTERS)
             self.send_json(200,{'model':MODEL,'workers':1,'counters':counters})
         elif self.path=='/v1/models':self.send_json(200,{'object':'list','data':[{'id':MODEL,'object':'model','owned_by':'existing-codex-login'}]})
         else:self.send_json(404,{'error':{'message':'Unsupported endpoint'}})
 
     def do_POST(self):
+        if not readiness()['ready']:
+            self.close_connection=True
+            self.send_json(503,{'error':{'message':'Document AI unavailable or draining'}});return
         if self.path=='/v1/invoice-metadata':
             try:
                 length=int(self.headers.get('Content-Length','0'))
@@ -229,14 +275,33 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200,response)
 
 class Server(socketserver.ThreadingMixIn,socketserver.TCPServer):
-    daemon_threads=True
+    daemon_threads=False
+    block_on_close=True
     allow_reuse_address=True
 
-def main():
+    def get_request(self):
+        connection,address=super().get_request()
+        connection.settimeout(IO_TIMEOUT)
+        return connection,address
+
+def serve(address=('0.0.0.0',18766)):
     os.umask(0o077)
     (HOME/'codex').mkdir(parents=True,exist_ok=True,mode=0o700)
     (WORK/'work').mkdir(parents=True,exist_ok=True,mode=0o700)
-    server=Server(('0.0.0.0',18766),Handler)
-    server.serve_forever()
+    initialize_ledger()
+    server=Server(address,Handler)
+    def terminate(signum,frame):
+        # Never take STATE in a signal handler; it can interrupt its owner.
+        if not DRAINING.is_set():
+            DRAINING.set()
+            threading.Thread(target=server.shutdown).start()
+    signal.signal(signal.SIGTERM,terminate)
+    signal.signal(signal.SIGINT,terminate)
+    try:server.serve_forever(poll_interval=.1)
+    finally:server.server_close()
+
+
+def main():
+    serve()
 
 if __name__=='__main__':main()
