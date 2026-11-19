@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import signal
 import stat
+import socket
 import socketserver
 import sqlite3
 import subprocess
@@ -32,6 +33,7 @@ COUNTERS = collections.Counter()
 CACHE = collections.OrderedDict()
 DRAINING = threading.Event()
 IO_TIMEOUT = 5
+CONNECTION_DEADLINE = 55
 QUEUE_TIMEOUT = 20
 ARRAYS = {
     'tags':('string',8), 'matched_tags':('string',8), 'tag_ids':('integer',10),
@@ -200,8 +202,8 @@ def infer(content,classification):
             if p.returncode:raise RuntimeError('Model unavailable')
             if classification=='invoice_metadata':value=checked_metadata(json.loads(text or 'null'),json.loads(content)['document'])
             else:value=validate(json.loads(text or 'null'),classification)
-        record('completed',started,usage)
         outcome=None
+        record('completed',started,usage)
         with STATE:
             CACHE[key]=(time.monotonic(),value,usage)
             while len(CACHE)>64:CACHE.popitem(last=False)
@@ -214,6 +216,22 @@ def infer(content,classification):
             ADMISSION.release()
 
 class Handler(BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        # A peer sending a byte before each socket timeout must not hold the
+        # sole owner indefinitely during drain.
+        self.deadline=threading.Timer(CONNECTION_DEADLINE,self.expire_connection)
+        self.deadline.daemon=True
+        self.deadline.start()
+
+    def expire_connection(self):
+        try:self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:pass
+
+    def finish(self):
+        try:super().finish()
+        finally:self.deadline.cancel()
+
     def log_message(self,*args):pass
 
     def send_json(self,status,value):
