@@ -1,4 +1,4 @@
-FROM wordpress:7.1.3
+FROM wordpress:7.1.4
 
 # Use the source commit to refresh the package-update layer.
 ARG SECURITY_REBUILD=local
