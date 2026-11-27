@@ -1,0 +1,19 @@
+--- a/crates/smtp/src/outbound/lookup.rs
++++ b/crates/smtp/src/outbound/lookup.rs
+@@ -150,6 +150,16 @@
+                 )
+                 .await
+                 .map_err(|err| {
++                    // A configured relay is infrastructure. Keep accepted mail queued
++                    // through negative DNS answers until the normal retry deadline.
++                    if matches!(remote_host, NextHop::Relay(_)) {
++                        return Status::TemporaryFailure(ErrorDetails {
++                            entity: remote_host.hostname().into(),
++                            details: Error::ConnectionError(
++                                format!("relay address lookup failed: {err}").into_boxed_str(),
++                            ),
++                        });
++                    }
+                     if let mail_auth::Error::Dns(mail_auth::DnsError::RecordNotFound(_)) = &err {
+                         if matches!(
+                             remote_host,
