@@ -33,6 +33,8 @@ jobs:
           test "$(git -C source rev-parse HEAD)" = aa47d8ef7bfba7200d3293198ac2592747b20e73
           git -C source apply --check ../recipes/stalwart/legacy-passwords.patch
           git -C source apply ../recipes/stalwart/legacy-passwords.patch
+          git -C source apply --check ../recipes/stalwart/relay-dns-retry.patch
+          git -C source apply ../recipes/stalwart/relay-dns-retry.patch
           rm -rf source/.git
       - name: Build and test image
         run: |
